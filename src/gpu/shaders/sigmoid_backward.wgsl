@@ -1,0 +1,23 @@
+// Sigmoid backward: dX[i] = dOut[i] · y[i] · (1 - y[i]),
+// where y = sigmoid(forward input) is the cached forward OUTPUT.
+
+struct Dims {
+  n: u32,
+  _p0: u32,
+  _p1: u32,
+  _p2: u32,
+};
+
+@group(0) @binding(0) var<storage, read>       dOut: array<f32>;
+@group(0) @binding(1) var<storage, read>       y: array<f32>;
+@group(0) @binding(2) var<storage, read_write> dX: array<f32>;
+@group(0) @binding(3) var<uniform>             dims: Dims;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= dims.n) {
+    return;
+  }
+  dX[i] = dOut[i] * y[i] * (1.0 - y[i]);
+}
