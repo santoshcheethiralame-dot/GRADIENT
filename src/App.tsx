@@ -75,26 +75,48 @@ export default function App() {
       <header className="masthead">
         <div>
           <h1 className="wordmark">
-            gradient<span className="dot">.</span>
+            gradient<span className="dot" />
           </h1>
           <p className="tagline">
             A neural network that trains entirely on your GPU, in the browser — WebGPU compute
             shaders for matmul, the forward pass, backprop, and optimization.
           </p>
         </div>
-        <StatusPill phase={phase} running={running} />
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          {phase.kind === 'ready' && <span className="pill">GPU · {phase.label}</span>}
+          <StatusPill phase={phase} running={running} />
+        </div>
       </header>
 
-      <div className="grid">
-        <DeviceCard phase={phase} />
+      <nav className="tabs">
+        <a className="tab" href="#live">
+          <span className="n">01</span>Train
+        </a>
+        <a className="tab" href="#draw">
+          <span className="n">02</span>Classify
+        </a>
+        <a className="tab" href="#diag">
+          <span className="n">03</span>Kernels
+        </a>
+        <a className="tab" href="#device">
+          <span className="n">04</span>Device
+        </a>
+      </nav>
 
-        {phase.kind === 'ready' && report?.training && <TrainingCard t={report.training} />}
+      <div className="grid">
+        <div className="grid-2">
+          <DeviceCard phase={phase} />
+          {phase.kind === 'ready' && report?.training && <TrainingCard t={report.training} />}
+        </div>
 
         {phase.kind === 'ready' && <Dashboard />}
 
         {phase.kind === 'ready' && (
-          <section className="card">
-            <h2>Kernel self-test · GPU vs. CPU oracle</h2>
+          <section className="card" id="diag">
+            <h2>
+              <span className="ch">CH3</span>Kernel diagnostics
+              <span className="meta">GPU vs. f64 oracle · every load</span>
+            </h2>
             <SelfTestView report={report} running={running} onRerun={executeSelfTest} />
           </section>
         )}
@@ -162,8 +184,10 @@ function StatusPill({ phase, running }: { phase: Phase; running: boolean }) {
 
 function DeviceCard({ phase }: { phase: Phase }) {
   return (
-    <section className="card">
-      <h2>Device</h2>
+    <section className="card" id="device">
+      <h2>
+        <span className="ch">SYS</span>Device
+      </h2>
       <dl className="kv">
         <dt>status</dt>
         <dd>
@@ -285,7 +309,9 @@ function GroupTable({
 function TrainingCard({ t }: { t: TrainingResult }) {
   return (
     <section className="card">
-      <h2>Training demo · Adam on synthetic data</h2>
+      <h2>
+        <span className="ch">CH0</span>Reference train · synthetic
+      </h2>
       <div className={`banner ${t.pass ? 'pass' : 'fail'}`} style={{ marginBottom: 18 }}>
         <span className="big">{t.pass ? '✓ IT LEARNS' : '✗ NO CONVERGENCE'}</span>
         <span>
@@ -326,8 +352,8 @@ function Sparkline({ data, width = 360, height = 64 }: { data: number[]; width?:
   const area = `0,${height} ${line} ${width},${height}`;
   return (
     <svg width={width} height={height} className="spark" role="img" aria-label="training loss curve">
-      <polygon points={area} fill="rgba(200,241,64,0.10)" />
-      <polyline points={line} fill="none" stroke="var(--lime)" strokeWidth={2} strokeLinejoin="round" />
+      <polygon points={area} fill="rgba(245,158,11,0.10)" />
+      <polyline points={line} fill="none" stroke="var(--amber)" strokeWidth={2} strokeLinejoin="round" />
     </svg>
   );
 }

@@ -6,7 +6,6 @@
 // through the worker for live classification.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { scaleSequential, interpolateViridis, rgb } from 'd3';
 import type { ActivationsMsg, InMsg, OutMsg } from '../worker/protocol';
 
 interface Info {
@@ -166,6 +165,32 @@ function drawDigit(canvas: HTMLCanvasElement | null, input: Float32Array, side =
   ctx.putImageData(img, 0, 0);
 }
 
+// Thermal colormap: cold near-black → blue → hot amber. The UI's accent palette,
+// applied to the activations — so the heatmap and the chrome share one language.
+const THERMAL: Array<[number, [number, number, number]]> = [
+  [0.0, [10, 12, 16]],
+  [0.28, [12, 52, 74]],
+  [0.52, [56, 189, 248]],
+  [0.74, [245, 158, 11]],
+  [1.0, [253, 230, 138]],
+];
+function thermal(t: number): [number, number, number] {
+  t = Math.max(0, Math.min(1, t));
+  for (let i = 1; i < THERMAL.length; i++) {
+    if (t <= THERMAL[i][0]) {
+      const [a, ca] = THERMAL[i - 1];
+      const [b, cb] = THERMAL[i];
+      const u = (t - a) / (b - a);
+      return [
+        Math.round(ca[0] + (cb[0] - ca[0]) * u),
+        Math.round(ca[1] + (cb[1] - ca[1]) * u),
+        Math.round(ca[2] + (cb[2] - ca[2]) * u),
+      ];
+    }
+  }
+  return THERMAL[THERMAL.length - 1][1];
+}
+
 function drawHidden(canvas: HTMLCanvasElement | null, hidden: Float32Array): void {
   if (!canvas) return;
   const dim = hidden.length;
@@ -176,18 +201,9 @@ function drawHidden(canvas: HTMLCanvasElement | null, hidden: Float32Array): voi
   if (!ctx) return;
   let max = 1e-6;
   for (let i = 0; i < dim; i++) if (hidden[i] > max) max = hidden[i];
-  const scale = scaleSequential(interpolateViridis).domain([0, max]);
   const img = ctx.createImageData(side, side);
   for (let i = 0; i < side * side; i++) {
-    let r = 8;
-    let g = 8;
-    let b = 8;
-    if (i < dim) {
-      const col = rgb(scale(hidden[i]));
-      r = col.r;
-      g = col.g;
-      b = col.b;
-    }
+    const [r, g, b] = i < dim ? thermal(hidden[i] / max) : [8, 10, 14];
     img.data[i * 4] = r;
     img.data[i * 4 + 1] = g;
     img.data[i * 4 + 2] = b;
@@ -200,37 +216,70 @@ function drawLoss(canvas: HTMLCanvasElement | null, loss: number[], acc: number[
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const cw = Math.max(1, Math.round(canvas.clientWidth * dpr));
+  const ch = Math.max(1, Math.round(canvas.clientHeight * dpr));
+  if (canvas.width !== cw) canvas.width = cw;
+  if (canvas.height !== ch) canvas.height = ch;
   const W = canvas.width;
   const H = canvas.height;
   ctx.clearRect(0, 0, W, H);
+
+  // graticule: 10×8 divisions + brighter center cross (oscilloscope graticule)
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#151515';
+  for (let i = 1; i < 10; i++) {
+    const x = Math.round((W / 10) * i) + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, H);
+    ctx.stroke();
+  }
+  for (let i = 1; i < 8; i++) {
+    const y = Math.round((H / 8) * i) + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(W, y);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = '#242424';
+  ctx.beginPath();
+  ctx.moveTo(Math.round(W / 2) + 0.5, 0);
+  ctx.lineTo(Math.round(W / 2) + 0.5, H);
+  ctx.moveTo(0, Math.round(H / 2) + 0.5);
+  ctx.lineTo(W, Math.round(H / 2) + 0.5);
+  ctx.stroke();
+
   const n = loss.length;
   if (n < 2) return;
   let maxLoss = 1e-6;
   for (let i = 0; i < n; i++) if (loss[i] > maxLoss) maxLoss = loss[i];
+  const pad = 3 * dpr;
 
-  // accuracy line (0..1), amber
-  ctx.strokeStyle = '#ffc44d';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  for (let i = 0; i < n; i++) {
-    const x = (i / (n - 1)) * W;
-    const y = H - 2 - acc[i] * (H - 4);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.stroke();
+  const trace = (arr: number[], max: number, color: string, glow: number, lw: number) => {
+    ctx.lineWidth = lw * dpr;
+    ctx.strokeStyle = color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = glow * dpr;
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const x = (i / (n - 1)) * W;
+      const y = H - pad - (arr[i] / max) * (H - 2 * pad);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    // glowing beam head at the live edge
+    const hy = H - pad - (arr[n - 1] / max) * (H - 2 * pad);
+    ctx.beginPath();
+    ctx.arc(W - 1, hy, 2.2 * dpr, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  };
 
-  // loss line, lime
-  ctx.strokeStyle = '#c8f140';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  for (let i = 0; i < n; i++) {
-    const x = (i / (n - 1)) * W;
-    const y = H - 2 - (loss[i] / maxLoss) * (H - 4);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.stroke();
+  trace(acc, 1, '#38bdf8', 5, 1.1); // accuracy — cold blue
+  trace(loss, maxLoss, '#f59e0b', 8, 1.6); // loss — hot amber
 }
 
 // ---- output bars ----
@@ -315,7 +364,9 @@ export default function Dashboard() {
   if (t.phase === 'idle') {
     return (
       <section className="card">
-        <h2>Live training · MNIST on a Web Worker</h2>
+        <h2>
+        <span className="ch">CH1</span>Live training · MNIST
+      </h2>
         <div className="row">
           <button className="btn" onClick={t.begin}>
             ▶ start live training
@@ -331,7 +382,9 @@ export default function Dashboard() {
   if (t.phase === 'error') {
     return (
       <section className="card">
-        <h2>Live training</h2>
+        <h2>
+          <span className="ch">CH1</span>Live training
+        </h2>
         <p className="banner fail">
           <code className="inline">{t.error}</code>
         </p>
@@ -342,7 +395,9 @@ export default function Dashboard() {
   if (t.phase === 'loading') {
     return (
       <section className="card">
-        <h2>Live training · MNIST on a Web Worker</h2>
+        <h2>
+        <span className="ch">CH1</span>Live training · MNIST
+      </h2>
         <p className="banner info">{t.status}</p>
       </section>
     );
@@ -350,20 +405,31 @@ export default function Dashboard() {
 
   // ready
   return (
-    <section className="card">
-      <h2>Live training · MNIST on a Web Worker</h2>
+    <section className="card" id="live">
+      <h2>
+        <span className="ch">CH1</span>Live training · MNIST
+        <span className="meta">784 → {t.info?.hidden} → 10 · Adam · lr 5.0e-3</span>
+      </h2>
 
       <div className="dash-top">
         <div className="metrics-grid">
           <Stat label="step" value={readout.step.toLocaleString()} />
-          <Stat label="loss" value={Number.isFinite(readout.loss) ? readout.loss.toFixed(3) : '—'} />
+          <Stat
+            label="loss"
+            value={Number.isFinite(readout.loss) ? readout.loss.toFixed(3) : '—'}
+            accent="amber"
+          />
           <Stat label="train acc" value={`${(readout.trainAcc * 100).toFixed(1)}%`} />
           <Stat
             label="test acc"
             value={readout.testAcc == null ? '…' : `${(readout.testAcc * 100).toFixed(1)}%`}
-            accent
+            accent="green"
           />
-          <Stat label="steps/s" value={Math.round(readout.stepsPerSec).toLocaleString()} />
+          <Stat
+            label="steps/s"
+            value={Math.round(readout.stepsPerSec).toLocaleString()}
+            accent="blue"
+          />
         </div>
         <div className="dash-controls">
           {t.running ? (
@@ -385,22 +451,22 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="train-row" style={{ marginTop: 16 }}>
+      <div className="scope-grid">
         <div>
-          <canvas ref={lossRef} width={420} height={120} className="loss-canvas" />
-          <div className="muted spark-cap">
-            <span style={{ color: 'var(--lime)' }}>━</span> loss ·{' '}
-            <span style={{ color: 'var(--amber)' }}>━</span> train accuracy
+          <canvas ref={lossRef} width={800} height={150} className="loss-canvas" />
+          <div className="spark-cap">
+            <span style={{ color: 'var(--amber)' }}>━</span> loss ·{' '}
+            <span style={{ color: 'var(--blue)' }}>━</span> train accuracy
           </div>
         </div>
         <div className="probe">
           <div className="probe-cell">
-            <canvas ref={inputRef} className="px" width={28} height={28} />
+            <canvas ref={inputRef} className="px cold" width={28} height={28} />
             <span>input · "{readout.label}"</span>
           </div>
           <div className="probe-cell">
-            <canvas ref={hiddenRef} className="px" width={8} height={8} />
-            <span>hidden ({t.info?.hidden})</span>
+            <canvas ref={hiddenRef} className="px hot" width={8} height={8} />
+            <span>hidden [{t.info?.hidden}]</span>
           </div>
           <div className="probe-cell out">
             <ProbBars probs={readout.probs} pred={readout.pred} />
@@ -414,11 +480,19 @@ export default function Dashboard() {
   );
 }
 
-function Stat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function Stat({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: string;
+  accent?: 'amber' | 'blue' | 'green';
+}) {
   return (
     <div className="stat">
       <div className="stat-label">{label}</div>
-      <div className={`stat-value${accent ? ' accent' : ''}`}>{value}</div>
+      <div className={`stat-value${accent ? ' ' + accent : ''}`}>{value}</div>
     </div>
   );
 }
@@ -467,17 +541,72 @@ function DrawDemo({
     clear();
   }, [clear]);
 
+  // Match MNIST preprocessing: crop to the ink's bounding box, scale the longest
+  // side to 20px, then center by center-of-mass in a 28×28 field. Without this,
+  // a raw drawing is wildly off the training distribution and misclassifies.
   const extract = useCallback((): Float32Array => {
     const c = canvasRef.current!;
+    const sctx = c.getContext('2d')!;
+    const W = c.width;
+    const H = c.height;
+    const srcData = sctx.getImageData(0, 0, W, H).data;
+    const out = new Float32Array(side * side);
+
+    let minX = W, minY = H, maxX = -1, maxY = -1;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        if (srcData[(y * W + x) * 4] > 24) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX < 0) return out; // nothing drawn
+
+    const bw = maxX - minX + 1;
+    const bh = maxY - minY + 1;
+    const scale = 20 / Math.max(bw, bh);
+    const dw = Math.max(1, Math.round(bw * scale));
+    const dh = Math.max(1, Math.round(bh * scale));
+
     const tmp = document.createElement('canvas');
     tmp.width = side;
     tmp.height = side;
     const tctx = tmp.getContext('2d')!;
     tctx.imageSmoothingEnabled = true;
-    tctx.drawImage(c, 0, 0, side, side);
-    const d = tctx.getImageData(0, 0, side, side).data;
-    const out = new Float32Array(side * side);
-    for (let i = 0; i < out.length; i++) out[i] = d[i * 4] / 255; // white ink on black
+    tctx.drawImage(
+      c,
+      minX, minY, bw, bh,
+      Math.round((side - dw) / 2), Math.round((side - dh) / 2), dw, dh,
+    );
+
+    // shift so center-of-mass lands at the center (MNIST centers by CoM)
+    let px = tctx.getImageData(0, 0, side, side).data;
+    let sum = 0, cx = 0, cy = 0;
+    for (let y = 0; y < side; y++) {
+      for (let x = 0; x < side; x++) {
+        const v = px[(y * side + x) * 4];
+        sum += v;
+        cx += x * v;
+        cy += y * v;
+      }
+    }
+    if (sum > 0) {
+      const sx = Math.round(side / 2 - cx / sum);
+      const sy = Math.round(side / 2 - cy / sum);
+      if (sx !== 0 || sy !== 0) {
+        const shifted = document.createElement('canvas');
+        shifted.width = side;
+        shifted.height = side;
+        const shctx = shifted.getContext('2d')!;
+        shctx.drawImage(tmp, sx, sy);
+        px = shctx.getImageData(0, 0, side, side).data;
+      }
+    }
+
+    for (let i = 0; i < out.length; i++) out[i] = px[i * 4] / 255;
     return out;
   }, [side]);
 
@@ -535,9 +664,9 @@ function DrawDemo({
   }
 
   return (
-    <div className="draw">
+    <div className="draw" id="draw" style={{ scrollMarginTop: 90 }}>
       <div className="group-label" style={{ marginTop: 22 }}>
-        draw a digit → live GPU inference
+        ▌ draw a digit → live GPU inference
       </div>
       <div className="draw-row">
         <canvas

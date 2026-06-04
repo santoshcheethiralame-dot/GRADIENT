@@ -29,6 +29,7 @@ let data: MnistData | null = null;
 let mlp: Mlp | null = null;
 let opt: Adam | null = null;
 let running = false;
+let infering = false; // pauses the train loop so inference reads its own forward pass
 let step = 0;
 let hiddenDim = 64;
 let lr = 0.005;
@@ -114,6 +115,11 @@ function sampleTrainBatch(): void {
 
 async function trainChunk(): Promise<void> {
   if (!running || !mlp || !opt || !data) return;
+  if (infering) {
+    // an inference is mid-flight; yield the shared buffers and retry shortly
+    setTimeout(trainChunk, 0);
+    return;
+  }
   const t0 = performance.now();
   let loss = 0;
   for (let k = 0; k < CHUNK; k++) {
@@ -171,11 +177,16 @@ async function postTestAcc(): Promise<void> {
 
 async function handleInfer(pixels: Float32Array): Promise<void> {
   if (!mlp || !data || pixels.length !== data.pixels) return;
-  device.queue.writeBuffer(batchImages.buffer, 0, pixels as Float32Array<ArrayBuffer>);
-  mlp.forward(batchImages);
-  const p = await mlp.P.toArray();
-  const probs = p.slice(0, C);
-  post({ type: 'probs', probs }, [probs.buffer]);
+  infering = true;
+  try {
+    device.queue.writeBuffer(batchImages.buffer, 0, pixels as Float32Array<ArrayBuffer>);
+    mlp.forward(batchImages);
+    const p = await mlp.P.toArray();
+    const probs = p.slice(0, C);
+    post({ type: 'probs', probs }, [probs.buffer]);
+  } finally {
+    infering = false;
+  }
 }
 
 sw.onmessage = (e: MessageEvent<InMsg>) => {

@@ -2,7 +2,7 @@
 
 A neural network that trains **entirely on your GPU, in the browser** — no Python, no server, no WASM. Forward pass, backpropagation, and the optimizer are all WebGPU compute shaders (WGSL) dispatched from TypeScript. The UI visualizes activations and gradients live as the network learns.
 
-> Status: **Complete — all 6 phases.** The full stack runs on WebGPU: device → tensors → matmul → forward → gradient-checked backprop → SGD/Adam → MNIST → a **Web Worker** that trains continuously off the main thread, streaming metrics and activations to a live dashboard (D3 loss/accuracy curves, viridis activation heatmaps) plus a **draw-a-digit** demo that classifies your handwriting live (~**97% test accuracy**). 32/32 kernel checks pass against a CPU oracle, and backprop is verified by numerical gradient checking — all re-run on every page load.
+> Status: **Complete — all 6 phases.** The full stack runs on WebGPU: device → tensors → matmul → forward → gradient-checked backprop → SGD/Adam → MNIST → a **Web Worker** that trains continuously off the main thread, streaming metrics and activations to a live **oscilloscope-style dashboard** (graticule loss/accuracy traces, blue→amber thermal activation heatmaps) plus a **draw-a-digit** demo that classifies your handwriting live (~**97% test accuracy**). 32/32 kernel checks pass against a CPU oracle, and backprop is verified by numerical gradient checking — all re-run on every page load. UI: a Tektronix/Grafana-inspired scientific-instrument theme.
 
 ## Why
 
@@ -12,9 +12,9 @@ Modern training runs on the GPU, but the GPU is usually a black box behind PyTor
 
 - **WebGPU / WGSL** — compute pipelines for all math (matmul, activations, backprop, SGD/Adam)
 - **TypeScript** — buffer/pipeline orchestration, the `GpuTensor` memory model
-- **React + Vite** — UI shell
-- **D3** — live activation/gradient heatmaps (later phase)
-- **Web Worker** — the training loop runs off the main thread (later phase)
+- **React + Vite** — UI shell, self-hosted Archivo + JetBrains Mono
+- **Canvas 2D** — the oscilloscope loss/accuracy chart (graticule + phosphor glow) and the thermal activation heatmaps
+- **Web Worker** — the training loop runs off the main thread, streaming to the UI
 
 ## Run
 
@@ -32,7 +32,7 @@ Requires a WebGPU-capable browser (Chrome / Edge 113+, recent Safari, or Firefox
 3. **Backward** — gradient shaders + numerical gradient checking ✅
 4. **Optimizers** — SGD, then Adam; training loop on synthetic data ✅
 5. **Data** — MNIST IDX parsing → GPU buffers, batched gather ✅
-6. **Visualize** — Worker-driven training, D3 heatmaps at 60fps, draw-a-digit ✅
+6. **Visualize** — Worker-driven training, live instrument dashboard at 60fps, draw-a-digit ✅
 
 ## Architecture notes
 
