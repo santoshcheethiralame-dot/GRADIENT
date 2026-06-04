@@ -114,11 +114,11 @@ export default function App() {
         </div>
       </header>
 
+      {phase.kind === 'ready' && <Overview phase={phase} report={report} />}
+
       <div className="grid">
-        <div className="grid-2">
-          <DeviceCard phase={phase} />
-          {phase.kind === 'ready' && report?.training && <TrainingCard t={report.training} />}
-        </div>
+        <DeviceCard phase={phase} />
+        {phase.kind === 'ready' && report?.training && <TrainingCard t={report.training} />}
 
         {phase.kind === 'ready' && <Dashboard />}
 
@@ -194,41 +194,63 @@ function StatusPill({ phase, running }: { phase: Phase; running: boolean }) {
 }
 
 function DeviceCard({ phase }: { phase: Phase }) {
+  const specs: Array<[string, string]> = [];
+  if (phase.kind === 'ready') {
+    specs.push(
+      ['status', 'connected'],
+      ['adapter', phase.label],
+      ['vendor', phase.info.vendor || '—'],
+      ['architecture', phase.info.architecture || '—'],
+      ['max buffer', fmtBytes(phase.limits.maxBufferSize)],
+      ['max binding', fmtBytes(phase.limits.maxStorageBufferBindingSize)],
+      ['wg invocations', phase.limits.maxComputeInvocationsPerWorkgroup.toLocaleString()],
+      ['wg size · x', phase.limits.maxComputeWorkgroupSizeX.toLocaleString()],
+      ['precision', 'f32'],
+      ['memory', 'row-major'],
+      ['shaders', 'WGSL'],
+      ['queue', '1 · ordered'],
+    );
+  } else if (phase.kind === 'init') {
+    specs.push(['status', 'requesting adapter…']);
+  } else {
+    specs.push(['status', phase.kind]);
+  }
   return (
     <section className="card" id="device">
       <h2>
         <span className="ch">SYS</span>Device
       </h2>
-      <dl className="kv">
-        <dt>status</dt>
-        <dd>
-          {phase.kind === 'init' && 'requesting adapter…'}
-          {phase.kind === 'ready' && 'connected'}
-          {phase.kind === 'unsupported' && 'unsupported'}
-          {phase.kind === 'error' && 'error'}
-        </dd>
-        {phase.kind === 'ready' && (
-          <>
-            <dt>adapter</dt>
-            <dd>{phase.label}</dd>
-            <dt>vendor</dt>
-            <dd>{phase.info.vendor || '—'}</dd>
-            <dt>architecture</dt>
-            <dd>{phase.info.architecture || '—'}</dd>
-            <dt>max buffer</dt>
-            <dd>{fmtBytes(phase.limits.maxBufferSize)}</dd>
-            <dt>max binding</dt>
-            <dd>{fmtBytes(phase.limits.maxStorageBufferBindingSize)}</dd>
-            <dt>wg invocations</dt>
-            <dd>{phase.limits.maxComputeInvocationsPerWorkgroup.toLocaleString()}</dd>
-            <dt>wg size · x</dt>
-            <dd>{phase.limits.maxComputeWorkgroupSizeX.toLocaleString()}</dd>
-            <dt>queue</dt>
-            <dd>1 · ordered</dd>
-          </>
-        )}
-      </dl>
+      <div className="specs">
+        {specs.map(([k, v]) => (
+          <div className="spec" key={k}>
+            <div className="spec-k">{k}</div>
+            <div className="spec-v">{v}</div>
+          </div>
+        ))}
+      </div>
     </section>
+  );
+}
+
+function Overview({ phase, report }: { phase: Phase; report: SelfTestReport | null }) {
+  const arch = phase.kind === 'ready' ? phase.info.architecture || phase.info.vendor || 'gpu' : 'gpu';
+  const passed = report ? report.results.filter((r) => r.pass).length : 0;
+  const total = report ? report.results.length : 0;
+  const cards: Array<{ k: string; v: string; ac?: boolean }> = [
+    { k: 'compute', v: arch },
+    { k: 'kernels verified', v: report ? `${passed}/${total}` : '…', ac: true },
+    { k: 'precision', v: 'f32 · row-major' },
+    { k: 'backend', v: 'WebGPU / WGSL' },
+  ];
+  return (
+    <div className="overview">
+      {cards.map((c) => (
+        <div className="ov-card" key={c.k}>
+          <div className="ov-k">{c.k}</div>
+          <div className={`ov-v${c.ac ? ' ac' : ''}`}>{c.v}</div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -334,7 +356,7 @@ function TrainingCard({ t }: { t: TrainingResult }) {
         </span>
       </div>
       <div className="train-row">
-        <div>
+        <div style={{ flex: 1, minWidth: 240 }}>
           <Sparkline data={t.lossHistory} />
           <div className="muted spark-cap">cross-entropy loss · {t.steps} full-batch steps</div>
         </div>
@@ -355,19 +377,33 @@ function TrainingCard({ t }: { t: TrainingResult }) {
   );
 }
 
-function Sparkline({ data, width = 360, height = 64 }: { data: number[]; width?: number; height?: number }) {
+function Sparkline({ data, width = 600, height = 76 }: { data: number[]; width?: number; height?: number }) {
   if (data.length < 2) return null;
   const min = Math.min(...data);
   const max = Math.max(...data);
   const range = max - min || 1;
   const px = (i: number) => (i / (data.length - 1)) * width;
-  const py = (v: number) => height - 3 - ((v - min) / range) * (height - 6);
+  const py = (v: number) => height - 4 - ((v - min) / range) * (height - 8);
   const line = data.map((v, i) => `${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(' ');
   const area = `0,${height} ${line} ${width},${height}`;
   return (
-    <svg width={width} height={height} className="spark" role="img" aria-label="training loss curve">
-      <polygon points={area} fill="rgba(245,158,11,0.10)" />
-      <polyline points={line} fill="none" stroke="var(--amber)" strokeWidth={2} strokeLinejoin="round" />
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      className="spark"
+      style={{ width: '100%', height }}
+      role="img"
+      aria-label="training loss curve"
+    >
+      <polygon points={area} fill="rgba(167,139,250,0.16)" />
+      <polyline
+        points={line}
+        fill="none"
+        stroke="var(--accent)"
+        strokeWidth={2}
+        vectorEffect="non-scaling-stroke"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }

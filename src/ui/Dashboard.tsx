@@ -168,11 +168,11 @@ function drawDigit(canvas: HTMLCanvasElement | null, input: Float32Array, side =
 // Thermal colormap: cold near-black → blue → hot amber. The UI's accent palette,
 // applied to the activations — so the heatmap and the chrome share one language.
 const THERMAL: Array<[number, [number, number, number]]> = [
-  [0.0, [10, 12, 16]],
-  [0.28, [12, 52, 74]],
-  [0.52, [56, 189, 248]],
-  [0.74, [245, 158, 11]],
-  [1.0, [253, 230, 138]],
+  [0.0, [18, 16, 30]],
+  [0.32, [54, 40, 96]],
+  [0.58, [124, 92, 240]],
+  [0.8, [167, 139, 250]],
+  [1.0, [216, 180, 254]],
 ];
 function thermal(t: number): [number, number, number] {
   t = Math.max(0, Math.min(1, t));
@@ -225,61 +225,67 @@ function drawLoss(canvas: HTMLCanvasElement | null, loss: number[], acc: number[
   const H = canvas.height;
   ctx.clearRect(0, 0, W, H);
 
-  // graticule: 10×8 divisions + brighter center cross (oscilloscope graticule)
+  // faint horizontal grid
   ctx.lineWidth = 1;
-  ctx.strokeStyle = '#151515';
-  for (let i = 1; i < 10; i++) {
-    const x = Math.round((W / 10) * i) + 0.5;
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, H);
-    ctx.stroke();
-  }
-  for (let i = 1; i < 8; i++) {
-    const y = Math.round((H / 8) * i) + 0.5;
+  ctx.strokeStyle = 'rgba(255,255,255,0.045)';
+  for (let i = 1; i < 5; i++) {
+    const y = Math.round((H / 5) * i) + 0.5;
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(W, y);
     ctx.stroke();
   }
-  ctx.strokeStyle = '#242424';
-  ctx.beginPath();
-  ctx.moveTo(Math.round(W / 2) + 0.5, 0);
-  ctx.lineTo(Math.round(W / 2) + 0.5, H);
-  ctx.moveTo(0, Math.round(H / 2) + 0.5);
-  ctx.lineTo(W, Math.round(H / 2) + 0.5);
-  ctx.stroke();
 
   const n = loss.length;
   if (n < 2) return;
   let maxLoss = 1e-6;
   for (let i = 0; i < n; i++) if (loss[i] > maxLoss) maxLoss = loss[i];
-  const pad = 3 * dpr;
+  const pad = 4 * dpr;
+  const yOf = (v: number, max: number) => H - pad - (v / max) * (H - 2 * pad);
+  const xOf = (i: number) => (i / (n - 1)) * W;
 
-  const trace = (arr: number[], max: number, color: string, glow: number, lw: number) => {
-    ctx.lineWidth = lw * dpr;
-    ctx.strokeStyle = color;
-    ctx.shadowColor = color;
-    ctx.shadowBlur = glow * dpr;
-    ctx.beginPath();
-    for (let i = 0; i < n; i++) {
-      const x = (i / (n - 1)) * W;
-      const y = H - pad - (arr[i] / max) * (H - 2 * pad);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-    // glowing beam head at the live edge
-    const hy = H - pad - (arr[n - 1] / max) * (H - 2 * pad);
-    ctx.beginPath();
-    ctx.arc(W - 1, hy, 2.2 * dpr, 0, Math.PI * 2);
-    ctx.fillStyle = color;
-    ctx.fill();
-    ctx.shadowBlur = 0;
-  };
+  // accuracy — light lavender, thin
+  ctx.lineWidth = 1.2 * dpr;
+  ctx.strokeStyle = 'rgba(216,180,254,0.85)';
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const x = xOf(i);
+    const y = yOf(acc[i], 1);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
 
-  trace(acc, 1, '#38bdf8', 5, 1.1); // accuracy — cold blue
-  trace(loss, maxLoss, '#f59e0b', 8, 1.6); // loss — hot amber
+  // loss — violet line with a gradient area fill
+  ctx.beginPath();
+  ctx.moveTo(0, yOf(loss[0], maxLoss));
+  for (let i = 1; i < n; i++) ctx.lineTo(xOf(i), yOf(loss[i], maxLoss));
+  ctx.lineTo(W, H);
+  ctx.lineTo(0, H);
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, 'rgba(167,139,250,0.40)');
+  grad.addColorStop(1, 'rgba(167,139,250,0)');
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  ctx.lineWidth = 2 * dpr;
+  ctx.strokeStyle = '#a78bfa';
+  ctx.shadowColor = 'rgba(167,139,250,0.8)';
+  ctx.shadowBlur = 8 * dpr;
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const x = xOf(i);
+    const y = yOf(loss[i], maxLoss);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(W - 1, yOf(loss[n - 1], maxLoss), 2.4 * dpr, 0, Math.PI * 2);
+  ctx.fillStyle = '#d8b4fe';
+  ctx.fill();
+  ctx.shadowBlur = 0;
 }
 
 // ---- output bars ----
@@ -455,8 +461,8 @@ export default function Dashboard() {
         <div>
           <canvas ref={lossRef} width={800} height={150} className="loss-canvas" />
           <div className="spark-cap">
-            <span style={{ color: 'var(--amber)' }}>━</span> loss ·{' '}
-            <span style={{ color: 'var(--blue)' }}>━</span> train accuracy
+            <span style={{ color: 'var(--accent)' }}>━</span> loss ·{' '}
+            <span style={{ color: 'var(--accent-pink)' }}>━</span> train accuracy
           </div>
         </div>
         <div className="probe">
