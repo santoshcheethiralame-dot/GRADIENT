@@ -1,17 +1,23 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { getGpuContext, WebGpuUnsupportedError } from './gpu/device';
 import {
   runSelfTest,
   type SelfTestReport,
-  type CheckResult,
   type CheckGroup,
   type TrainingResult,
 } from './gpu/selftest';
 import Dashboard from './ui/Dashboard';
 
+interface DeviceLimits {
+  maxBufferSize: number;
+  maxStorageBufferBindingSize: number;
+  maxComputeInvocationsPerWorkgroup: number;
+  maxComputeWorkgroupSizeX: number;
+}
+
 type Phase =
   | { kind: 'init' }
-  | { kind: 'ready'; label: string; info: GPUAdapterInfo }
+  | { kind: 'ready'; label: string; info: GPUAdapterInfo; limits: DeviceLimits }
   | { kind: 'unsupported'; message: string }
   | { kind: 'error'; message: string };
 
@@ -58,7 +64,18 @@ export default function App() {
     (async () => {
       try {
         const ctx = await getGpuContext();
-        setPhase({ kind: 'ready', label: ctx.label, info: ctx.info });
+        const L = ctx.device.limits;
+        setPhase({
+          kind: 'ready',
+          label: ctx.label,
+          info: ctx.info,
+          limits: {
+            maxBufferSize: L.maxBufferSize,
+            maxStorageBufferBindingSize: L.maxStorageBufferBindingSize,
+            maxComputeInvocationsPerWorkgroup: L.maxComputeInvocationsPerWorkgroup,
+            maxComputeWorkgroupSizeX: L.maxComputeWorkgroupSizeX,
+          },
+        });
         await executeSelfTest();
       } catch (e) {
         if (e instanceof WebGpuUnsupportedError) {
@@ -73,35 +90,29 @@ export default function App() {
   return (
     <div className="app">
       <header className="masthead">
-        <div>
+        <div className="brand">
           <h1 className="wordmark">
             gradient<span className="dot" />
           </h1>
-          <p className="tagline">
-            A neural network that trains entirely on your GPU, in the browser — WebGPU compute
-            shaders for matmul, the forward pass, backprop, and optimization.
+          <p className="masthead-desc">
+            WebGPU neural-net trainer — matmul · forward · backprop · optimize, all on the GPU
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          {phase.kind === 'ready' && <span className="pill">GPU · {phase.label}</span>}
+        <div className="statline">
+          {phase.kind === 'ready' && (
+            <span>
+              GPU&nbsp;<b>{phase.label}</b>
+            </span>
+          )}
+          {report && (
+            <span className={report.allPassed ? 'nominal' : 'fault'}>
+              {report.results.filter((r) => r.pass).length}/{report.results.length} KERNELS{' '}
+              {report.allPassed ? 'NOMINAL' : 'FAULT'}
+            </span>
+          )}
           <StatusPill phase={phase} running={running} />
         </div>
       </header>
-
-      <nav className="tabs">
-        <a className="tab" href="#live">
-          <span className="n">01</span>Train
-        </a>
-        <a className="tab" href="#draw">
-          <span className="n">02</span>Classify
-        </a>
-        <a className="tab" href="#diag">
-          <span className="n">03</span>Kernels
-        </a>
-        <a className="tab" href="#device">
-          <span className="n">04</span>Device
-        </a>
-      </nav>
 
       <div className="grid">
         <div className="grid-2">
@@ -150,7 +161,7 @@ export default function App() {
 
       <p className="foot">
         All 6 phases complete — WebGPU device → tensors → matmul → forward → backprop (gradient-checked)
-        → SGD/Adam → MNIST → a Worker-driven live dashboard with D3 heatmaps and draw-a-digit inference.
+        → SGD/Adam → MNIST → a Worker-driven live dashboard with activation heatmaps and draw-a-digit inference.
       </p>
     </div>
   );
@@ -204,11 +215,27 @@ function DeviceCard({ phase }: { phase: Phase }) {
             <dd>{phase.info.vendor || '—'}</dd>
             <dt>architecture</dt>
             <dd>{phase.info.architecture || '—'}</dd>
+            <dt>max buffer</dt>
+            <dd>{fmtBytes(phase.limits.maxBufferSize)}</dd>
+            <dt>max binding</dt>
+            <dd>{fmtBytes(phase.limits.maxStorageBufferBindingSize)}</dd>
+            <dt>wg invocations</dt>
+            <dd>{phase.limits.maxComputeInvocationsPerWorkgroup.toLocaleString()}</dd>
+            <dt>wg size · x</dt>
+            <dd>{phase.limits.maxComputeWorkgroupSizeX.toLocaleString()}</dd>
+            <dt>queue</dt>
+            <dd>1 · ordered</dd>
           </>
         )}
       </dl>
     </section>
   );
+}
+
+function fmtBytes(n: number): string {
+  if (n >= 1 << 30) return `${(n / (1 << 30)).toFixed(n % (1 << 30) ? 2 : 0)} GB`;
+  if (n >= 1 << 20) return `${Math.round(n / (1 << 20))} MB`;
+  return `${Math.round(n / 1024)} KB`;
 }
 
 function SelfTestView({
@@ -232,51 +259,14 @@ function SelfTestView({
 
   return (
     <>
-      <div className={`banner ${report.allPassed ? 'pass' : 'fail'}`} style={{ marginBottom: 4 }}>
-        <span className="big">{report.allPassed ? '✓ ALL PASS' : '✗ FAILURES'}</span>
-        <span>
-          {passed}/{total} checks within tolerance (rel. err &lt; 1e-3)
+      <div className={`summary ${report.allPassed ? 'ok' : 'bad'}`}>
+        <span className="big">
+          {report.allPassed ? `${passed} / ${total} NOMINAL` : `${total - passed} FAULT`}
         </span>
+        <span className="sub">all kernels verified against an f64 CPU oracle · rel. err &lt; 1e-3</span>
       </div>
 
-      {GROUP_ORDER.map((group) => {
-        const rows = report.results.filter((r) => r.group === group);
-        if (rows.length === 0) return null;
-        return (
-          <GroupTable
-            key={group}
-            title={GROUP_LABELS[group]}
-            rows={rows}
-            showThroughput={group === 'matmul'}
-          />
-        );
-      })}
-
-      <div className="row" style={{ marginTop: 18 }}>
-        <button className="btn" onClick={onRerun} disabled={running}>
-          {running ? 'running…' : 're-run self-test'}
-        </button>
-        <span className="muted" style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>
-          round-trip includes readback; throughput is indicative, not a benchmark.
-        </span>
-      </div>
-    </>
-  );
-}
-
-function GroupTable({
-  title,
-  rows,
-  showThroughput,
-}: {
-  title: string;
-  rows: CheckResult[];
-  showThroughput: boolean;
-}) {
-  return (
-    <div style={{ marginTop: 18 }}>
-      <div className="group-label">{title}</div>
-      <table className="results">
+      <table className="diag">
         <thead>
           <tr>
             <th className="l">op</th>
@@ -284,25 +274,49 @@ function GroupTable({
             <th>max abs err</th>
             <th>max rel err</th>
             <th>time</th>
-            {showThroughput && <th>throughput</th>}
+            <th>throughput</th>
             <th>verdict</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((r, i) => (
-            <tr key={i}>
-              <td className="l">{r.name}</td>
-              <td className="l detail">{r.detail}</td>
-              <td>{r.maxAbsErr.toExponential(2)}</td>
-              <td>{r.maxRelErr.toExponential(2)}</td>
-              <td>{r.ms.toFixed(2)} ms</td>
-              {showThroughput && <td>{r.throughput ?? '—'}</td>}
-              <td className={`verdict ${r.pass ? 'pass' : 'fail'}`}>{r.pass ? 'PASS' : 'FAIL'}</td>
-            </tr>
-          ))}
+          {GROUP_ORDER.map((group) => {
+            const rows = report.results.filter((r) => r.group === group);
+            if (rows.length === 0) return null;
+            return (
+              <Fragment key={group}>
+                <tr className="grouprow">
+                  <td colSpan={7}>
+                    {GROUP_LABELS[group]} <span className="gcount">· {rows.length} checks</span>
+                  </td>
+                </tr>
+                {rows.map((r, i) => (
+                  <tr key={group + i}>
+                    <td className="l strong">{r.name}</td>
+                    <td className="l detail">{r.detail}</td>
+                    <td>{r.maxAbsErr.toExponential(2)}</td>
+                    <td>{r.maxRelErr.toExponential(2)}</td>
+                    <td className="detail">{r.ms.toFixed(2)} ms</td>
+                    <td className="detail">{r.throughput ?? '—'}</td>
+                    <td className={`verdict ${r.pass ? 'pass' : 'fail'}`}>
+                      {r.pass ? 'PASS' : 'FAIL'}
+                    </td>
+                  </tr>
+                ))}
+              </Fragment>
+            );
+          })}
         </tbody>
       </table>
-    </div>
+
+      <div className="row" style={{ marginTop: 20 }}>
+        <button className="btn" onClick={onRerun} disabled={running}>
+          {running ? 'running…' : 're-run diagnostics'}
+        </button>
+        <span className="muted" style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>
+          round-trip includes readback; throughput is indicative, not a benchmark.
+        </span>
+      </div>
+    </>
   );
 }
 
