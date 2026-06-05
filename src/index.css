@@ -886,3 +886,36 @@ canvas.px {
   font-size: 12px;
   white-space: nowrap;
 }
+
+/* ---- CPU fallback sample predictions ---- */
+.cpu-samples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.cpu-sample {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+.cpu-sample canvas {
+  width: 48px;
+  height: 48px;
+  image-rendering: pixelated;
+  border: 2px solid var(--black);
+  border-radius: 6px;
+  background: #000;
+}
+.cpu-sample span {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--purple-deep);
+}
+.cpu-sample.wrong canvas {
+  border-color: var(--danger);
+}
+.cpu-sample.wrong span {
+  color: var(--danger);
+}

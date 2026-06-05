@@ -131,3 +131,34 @@ export async function loadMnist(device: GPUDevice, onProgress?: LoadProgress): P
 
   return { train, test, rows: tri.rows, cols: tri.cols, pixels };
 }
+
+export interface MnistRaw {
+  train: { images: Uint8Array; labels: Uint8Array; count: number };
+  test: { images: Uint8Array; labels: Uint8Array; count: number };
+  rows: number;
+  cols: number;
+  pixels: number;
+}
+
+/** Fetch + parse MNIST to CPU arrays only (no GPU device). Used by the CPU fallback. */
+export async function fetchMnistRaw(onProgress?: LoadProgress): Promise<MnistRaw> {
+  onProgress?.('fetching IDX files…');
+  const [triBuf, trlBuf, teiBuf, telBuf] = await Promise.all([
+    fetchBytes(BASE + FILES.trainImages),
+    fetchBytes(BASE + FILES.trainLabels),
+    fetchBytes(BASE + FILES.testImages),
+    fetchBytes(BASE + FILES.testLabels),
+  ]);
+  onProgress?.('parsing IDX…');
+  const tri = parseImages(triBuf);
+  const trl = parseLabels(trlBuf);
+  const tei = parseImages(teiBuf);
+  const tel = parseLabels(telBuf);
+  return {
+    train: { images: tri.data, labels: trl.data, count: tri.count },
+    test: { images: tei.data, labels: tel.data, count: tei.count },
+    rows: tri.rows,
+    cols: tri.cols,
+    pixels: tri.rows * tri.cols,
+  };
+}

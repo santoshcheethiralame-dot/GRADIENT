@@ -7,6 +7,7 @@ import {
   type TrainingResult,
 } from './gpu/selftest';
 import Dashboard from './ui/Dashboard';
+import CpuTrainer from './ui/CpuTrainer';
 import { runProfile, type ProfileRow } from './gpu/profile';
 
 interface DeviceLimits {
@@ -19,6 +20,7 @@ interface DeviceLimits {
 type Phase =
   | { kind: 'init' }
   | { kind: 'ready'; label: string; info: GPUAdapterInfo; limits: DeviceLimits }
+  | { kind: 'cpu' }
   | { kind: 'unsupported'; message: string }
   | { kind: 'error'; message: string };
 
@@ -62,6 +64,10 @@ export default function App() {
   useEffect(() => {
     if (booted.current) return; // guard double-invoke
     booted.current = true;
+    if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('cpu')) {
+      setPhase({ kind: 'cpu' }); // forced CPU mode — skip WebGPU entirely
+      return;
+    }
     (async () => {
       try {
         const ctx = await getGpuContext();
@@ -133,19 +139,8 @@ export default function App() {
 
         {phase.kind === 'ready' && <ProfilerCard />}
 
-        {phase.kind === 'unsupported' && (
-          <section className="card">
-            <div className="banner fail">
-              <span className="big">WebGPU unavailable</span>
-            </div>
-            <p className="tagline" style={{ marginTop: 14 }}>
-              {phase.message}
-            </p>
-            <p className="muted" style={{ fontFamily: 'var(--mono)', fontSize: 12.5 }}>
-              This is expected in some headless/CI browsers. Open in desktop Chrome or Edge 113+ to
-              run the GPU kernels.
-            </p>
-          </section>
+        {(phase.kind === 'cpu' || phase.kind === 'unsupported') && (
+          <CpuTrainer forced={phase.kind === 'cpu'} />
         )}
 
         {phase.kind === 'error' && (
@@ -182,6 +177,8 @@ function StatusPill({ phase, running }: { phase: Phase; running: boolean }) {
       cls += ' ok';
       text = 'gpu ready';
     }
+  } else if (phase.kind === 'cpu') {
+    text = 'cpu mode';
   } else {
     cls += ' err';
     text = phase.kind === 'unsupported' ? 'unsupported' : 'error';
