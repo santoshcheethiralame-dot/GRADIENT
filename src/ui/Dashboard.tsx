@@ -1,10 +1,3 @@
-// The live training dashboard. A Web Worker runs continuous MNIST training on
-// its own GPUDevice and streams metrics + a probe sample's activations back.
-// High-frequency data is buffered in refs; a single requestAnimationFrame loop
-// renders the loss chart and activation heatmaps at 60fps regardless of how fast
-// the worker trains. The draw-a-digit demo round-trips a hand-drawn 28×28 image
-// through the worker for live classification.
-
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ActivationsMsg, EmbeddingMsg, InMsg, LandscapeMsg, OutMsg } from '../worker/protocol';
 
@@ -99,7 +92,6 @@ function useTrainer() {
             if (refs.lossHist.current.length > HISTORY_CAP) refs.lossHist.current.shift();
             if (refs.accHist.current.length > HISTORY_CAP) refs.accHist.current.shift();
           } else {
-            // reset
             refs.lossHist.current = [];
             refs.accHist.current = [];
             refs.testAcc.current = null;
@@ -165,8 +157,6 @@ function useTrainer() {
   };
 }
 
-// ---- canvas drawing ----
-
 function drawDigit(canvas: HTMLCanvasElement | null, input: Float32Array, side = 28): void {
   if (!canvas) return;
   if (canvas.width !== side) canvas.width = side;
@@ -185,8 +175,6 @@ function drawDigit(canvas: HTMLCanvasElement | null, input: Float32Array, side =
   ctx.putImageData(img, 0, 0);
 }
 
-// Thermal colormap: cold near-black → blue → hot amber. The UI's accent palette,
-// applied to the activations — so the heatmap and the chrome share one language.
 const THERMAL: Array<[number, [number, number, number]]> = [
   [0.0, [21, 16, 31]],
   [0.3, [72, 40, 112]],
@@ -245,7 +233,6 @@ function drawLoss(canvas: HTMLCanvasElement | null, loss: number[], acc: number[
   const H = canvas.height;
   ctx.clearRect(0, 0, W, H);
 
-  // faint horizontal grid
   ctx.lineWidth = 1;
   ctx.strokeStyle = 'rgba(255,255,255,0.08)';
   for (let i = 1; i < 5; i++) {
@@ -264,7 +251,6 @@ function drawLoss(canvas: HTMLCanvasElement | null, loss: number[], acc: number[
   const yOf = (v: number, max: number) => H - pad - (v / max) * (H - 2 * pad);
   const xOf = (i: number) => (i / (n - 1)) * W;
 
-  // accuracy — purple
   ctx.lineWidth = 1.8 * dpr;
   ctx.strokeStyle = '#c084fc';
   ctx.beginPath();
@@ -276,7 +262,6 @@ function drawLoss(canvas: HTMLCanvasElement | null, loss: number[], acc: number[
   }
   ctx.stroke();
 
-  // loss — violet line with a gradient area fill
   ctx.beginPath();
   ctx.moveTo(0, yOf(loss[0], maxLoss));
   for (let i = 1; i < n; i++) ctx.lineTo(xOf(i), yOf(loss[i], maxLoss));
@@ -307,7 +292,6 @@ function drawLoss(canvas: HTMLCanvasElement | null, loss: number[], acc: number[
   ctx.shadowBlur = 0;
 }
 
-// 10-class categorical palette for the embedding scatter
 const CLASS_COLORS = [
   '#a78bfa', '#ec4899', '#38d6ff', '#f59e0b', '#4ade80',
   '#fb923c', '#818cf8', '#f43f5e', '#facc15', '#2dd4bf',
@@ -374,14 +358,14 @@ function drawLandscape(canvas: HTMLCanvasElement | null, land: LandscapeMsg | nu
   const px = (i: number, j: number) => cx + (i - j) * sx;
   const py = (i: number, j: number, h: number) => cyTop + (i + j) * sy - norm(h) * amp;
 
-  const lo = [124, 92, 246]; // low loss → purple
-  const hi = [236, 72, 153]; // high loss → pink
+  const lo = [124, 92, 246];
+  const hi = [236, 72, 153];
   const color = (t: number) =>
     `rgb(${Math.round(lo[0] + (hi[0] - lo[0]) * t)},${Math.round(lo[1] + (hi[1] - lo[1]) * t)},${Math.round(lo[2] + (hi[2] - lo[2]) * t)})`;
 
   const quads: Array<[number, number]> = [];
   for (let i = 0; i < G - 1; i++) for (let j = 0; j < G - 1; j++) quads.push([i, j]);
-  quads.sort((a, b) => a[0] + a[1] - (b[0] + b[1])); // far → near
+  quads.sort((a, b) => a[0] + a[1] - (b[0] + b[1]));
 
   ctx.lineWidth = 1;
   for (const [i, j] of quads) {
@@ -401,7 +385,6 @@ function drawLandscape(canvas: HTMLCanvasElement | null, land: LandscapeMsg | nu
     ctx.stroke();
   }
 
-  // current weights (grid center, α=β=0)
   const m = (G - 1) / 2;
   const hc = grid[Math.round(m) * G + Math.round(m)];
   ctx.beginPath();
@@ -412,8 +395,6 @@ function drawLandscape(canvas: HTMLCanvasElement | null, land: LandscapeMsg | nu
   ctx.lineWidth = 2;
   ctx.stroke();
 }
-
-// ---- output bars ----
 
 const DIGITS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
@@ -437,8 +418,6 @@ function ProbBars({ probs, pred }: { probs: Float32Array | null; pred: number })
     </div>
   );
 }
-
-// ---- main dashboard ----
 
 interface Readout extends Metrics {
   testAcc: number | null;
@@ -465,7 +444,6 @@ export default function Dashboard() {
     probs: null,
   });
 
-  // single rAF render loop
   const refs = t.refs;
   useEffect(() => {
     if (t.phase !== 'ready') return;
@@ -538,7 +516,6 @@ export default function Dashboard() {
     );
   }
 
-  // ready
   return (
     <section className="card" id="live">
       <h2>
@@ -683,8 +660,6 @@ function HiddenSelect({ value, onChange }: { value: number; onChange: (v: number
   );
 }
 
-// ---- draw-a-digit ----
-
 function DrawDemo({
   pixels,
   onInfer,
@@ -716,9 +691,6 @@ function DrawDemo({
     clear();
   }, [clear]);
 
-  // Match MNIST preprocessing: crop to the ink's bounding box, scale the longest
-  // side to 20px, then center by center-of-mass in a 28×28 field. Without this,
-  // a raw drawing is wildly off the training distribution and misclassifies.
   const extract = useCallback((): Float32Array => {
     const c = canvasRef.current!;
     const sctx = c.getContext('2d')!;
@@ -738,7 +710,7 @@ function DrawDemo({
         }
       }
     }
-    if (maxX < 0) return out; // nothing drawn
+    if (maxX < 0) return out;
 
     const bw = maxX - minX + 1;
     const bh = maxY - minY + 1;
@@ -757,7 +729,6 @@ function DrawDemo({
       Math.round((side - dw) / 2), Math.round((side - dh) / 2), dw, dh,
     );
 
-    // shift so center-of-mass lands at the center (MNIST centers by CoM)
     let px = tctx.getImageData(0, 0, side, side).data;
     let sum = 0, cx = 0, cy = 0;
     for (let y = 0; y < side; y++) {
@@ -798,9 +769,7 @@ function DrawDemo({
     last.current = pos(e);
     try {
       (e.target as Element).setPointerCapture(e.pointerId);
-    } catch {
-      /* pointer may not be capturable (synthetic events) */
-    }
+    } catch {}
   };
   const move = (e: React.PointerEvent) => {
     if (!drawing.current) return;

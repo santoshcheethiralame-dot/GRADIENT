@@ -1,6 +1,3 @@
-// SGD parameter update (in-place): w -= lr · g. The simplest optimizer — one
-// elementwise pass over a parameter tensor and its gradient.
-
 struct Sgd {
   n: u32,
   lr: f32,

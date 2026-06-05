@@ -1,7 +1,3 @@
-// ReLU backward: dX[i] = dOut[i] · (fwdIn[i] > 0 ? 1 : 0).
-// `fwd` is the forward INPUT to ReLU (the pre-activation). The mask is the
-// subgradient of max(0,x): 0 at x <= 0, else 1.
-
 struct Dims {
   n: u32,
   _p0: u32,

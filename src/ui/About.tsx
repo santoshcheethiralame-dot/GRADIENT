@@ -1,7 +1,3 @@
-// The About page — a portfolio-facing overview of what gradient is, how it
-// works, and how it's verified. Full-bleed like the lab view; two-column
-// sections use the width instead of leaving it empty. Pure presentation.
-
 import { Fragment } from 'react';
 
 const REPO = 'https://github.com/santoshcheethiralame-dot/GRADIENT';

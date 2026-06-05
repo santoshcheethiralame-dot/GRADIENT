@@ -1,7 +1,3 @@
-// Sigmoid (out-of-place): out[i] = 1 / (1 + exp(-in[i])).
-// Saturates cleanly without NaN: very negative in -> exp(+large) -> 0; very
-// positive in -> exp(0-) -> 1.
-
 struct Dims {
   n: u32,
   _p0: u32,

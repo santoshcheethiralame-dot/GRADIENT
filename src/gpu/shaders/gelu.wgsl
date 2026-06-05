@@ -1,7 +1,3 @@
-// GELU (tanh approximation, the GPT-2 variant), elementwise:
-//   out[i] = 0.5 * x * (1 + tanh( sqrt(2/pi) * (x + 0.044715 * x^3) ))
-// One invocation per element. Matches geluInPlace in nanogpt.ts.
-
 struct Dims {
   n: u32,
   _p0: u32,
@@ -20,6 +16,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     return;
   }
   let x = inp[i];
-  let u = 0.7978845608028654 * (x + 0.044715 * x * x * x); // sqrt(2/pi)
+  let u = 0.7978845608028654 * (x + 0.044715 * x * x * x);
   outp[i] = 0.5 * x * (1.0 + tanh(u));
 }

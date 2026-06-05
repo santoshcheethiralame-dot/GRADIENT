@@ -1,9 +1,3 @@
-// GPU kernel profiler. Measures real amortized GPU time by warming up, then
-// submitting many dispatches back-to-back (no readback in between) and dividing
-// the wall-clock time once the queue drains via onSubmittedWorkDone(). This
-// avoids the readback overhead that pollutes a single round-trip timing and
-// works everywhere (no dependency on the optional timestamp-query feature).
-
 import { getGpuContext } from './device';
 import { GpuTensor } from './tensor';
 import { matmul, createU32Buffer } from './ops';
@@ -12,8 +6,8 @@ import { Mlp } from '../nn/mlp';
 export interface ProfileRow {
   label: string;
   detail: string;
-  ms: number; // GPU time per call
-  gflops: number | null; // null for the composite training-step row
+  ms: number;
+  gflops: number | null;
 }
 
 function randomData(n: number, scale = 1): Float32Array {
@@ -27,7 +21,7 @@ export async function runProfile(): Promise<ProfileRow[]> {
   const rows: ProfileRow[] = [];
 
   const timeit = async (runOnce: () => void, iters: number): Promise<number> => {
-    for (let i = 0; i < 6; i++) runOnce(); // warmup
+    for (let i = 0; i < 6; i++) runOnce();
     await device.queue.onSubmittedWorkDone();
     const t0 = performance.now();
     for (let i = 0; i < iters; i++) runOnce();
@@ -35,7 +29,6 @@ export async function runProfile(): Promise<ProfileRow[]> {
     return (performance.now() - t0) / iters;
   };
 
-  // matmul across sizes — the core kernel
   const sizes: Array<[number, 'naive' | 'tiled', number]> = [
     [256, 'naive', 120],
     [256, 'tiled', 120],
@@ -58,7 +51,6 @@ export async function runProfile(): Promise<ProfileRow[]> {
     out.destroy();
   }
 
-  // a full forward + backward training step (no readback)
   const B = 64;
   const D0 = 784;
   const D1 = 128;

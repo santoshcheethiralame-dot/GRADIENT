@@ -1,13 +1,7 @@
-// Optimizers as thin wrappers over the GPU step kernels. Both take the list of
-// parameter tensors up front and a matching list of gradient tensors at each
-// step(). Adam additionally owns persistent first/second-moment buffers (m, v)
-// for every parameter — allocated once, mutated in place each step.
-
 import { GpuTensor } from '../gpu/tensor';
 import { sgdStep, adamStep } from '../gpu/ops';
 
 export interface Optimizer {
-  /** Apply one update. `grads[i]` must correspond to `params[i]`. */
   step(grads: GpuTensor[]): void;
 }
 

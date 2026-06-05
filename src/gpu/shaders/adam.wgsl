@@ -1,19 +1,11 @@
-// Adam parameter update (in-place). Maintains per-parameter first/second moment
-// estimates m, v across steps:
-//   m = β1·m + (1-β1)·g
-//   v = β2·v + (1-β2)·g²
-//   ŵ -= lr · (m / bc1) / (sqrt(v / bc2) + eps)
-// where bc1 = 1-β1^t and bc2 = 1-β2^t are the bias-correction terms, computed
-// on the host each step and passed in (saves a pow() in the shader).
-
 struct Adam {
   n: u32,
   lr: f32,
   beta1: f32,
   beta2: f32,
   eps: f32,
-  bc1: f32, // 1 - beta1^t
-  bc2: f32, // 1 - beta2^t
+  bc1: f32,
+  bc2: f32,
   _pad: u32,
 };
 

@@ -1,13 +1,3 @@
-// nano-GPT increment 3: the forward pass on WebGPU.
-//
-// Mirrors NanoGpt.forward (nanogpt.ts) but runs on compute shaders. The new
-// transformer kernels are layer-norm, causal-softmax, GELU and the residual
-// add; the projections (Q/K/V, output, MLP, head) and the attention products
-// (QKᵀ, A·V) reuse the matmul / matmulABT kernels already in the engine. The
-// token+position embedding lookup is a tiny CPU gather, then everything runs on
-// the GPU. Verified against the CPU forward (logits → probabilities) in the
-// self-test.
-
 import { GpuTensor } from '../gpu/tensor';
 import {
   matmul,
@@ -28,7 +18,6 @@ export async function nanoGptGpuForward(
   const { dEmbed: dE, vocab } = model.cfg;
   const t = ids.length;
 
-  // token + position embeddings (CPU gather) → upload the residual stream
   const xData = new Float32Array(t * dE);
   for (let i = 0; i < t; i++) {
     const te = ids[i] * dE;
@@ -61,18 +50,16 @@ export async function nanoGptGpuForward(
   const lnfb = up(model.lnfb, [dE]);
   const head = up(model.head, [dE, vocab]);
 
-  // ---- attention (pre-LN, single head, causal) ----
   const h = keep(layerNorm(device, x, ln1g, ln1b));
   const Q = keep(matmul(device, h, Wq));
   const K = keep(matmul(device, h, Wk));
   const V = keep(matmul(device, h, Wv));
-  const scores = keep(matmulABT(device, Q, K)); // scores[i,j] = Q[i]·K[j]
+  const scores = keep(matmulABT(device, Q, K));
   const attn = keep(causalSoftmax(device, scores, 1 / Math.sqrt(dE)));
   const ctx = keep(matmul(device, attn, V));
   const o = keep(matmul(device, ctx, Wo));
   const xa = keep(addTensors(device, x, o));
 
-  // ---- MLP (pre-LN) ----
   const h2 = keep(layerNorm(device, xa, ln2g, ln2b));
   const f = keep(matmul(device, h2, Wff1));
   biasAdd(device, f, bff1);
@@ -81,7 +68,6 @@ export async function nanoGptGpuForward(
   biasAdd(device, f2, bff2);
   const xb = keep(addTensors(device, xa, f2));
 
-  // ---- head ----
   const xf = keep(layerNorm(device, xb, lnfg, lnfb));
   const logits = keep(matmul(device, xf, head));
 

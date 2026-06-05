@@ -1,9 +1,3 @@
-// MNIST loader. Fetches the gzipped IDX files (served same-origin from
-// public/mnist/), decompresses them with the browser's DecompressionStream,
-// parses the IDX header, and uploads the raw uint8 pixel stream to a GPU storage
-// buffer — packed 4 pixels per u32, so all 60k training images fit in ~47 MB.
-// A gather shader (see gpu/ops.ts) pulls normalized f32 mini-batches on demand.
-
 const BASE = `${import.meta.env.BASE_URL}mnist/`;
 
 const FILES = {
@@ -14,9 +8,9 @@ const FILES = {
 } as const;
 
 export interface MnistSplit {
-  images: Uint8Array; // [count * pixels] raw uint8 (kept on CPU for rendering)
-  packed: GPUBuffer; // same bytes on the GPU, read as u32 by the gather shader
-  labels: Uint8Array; // [count]
+  images: Uint8Array;
+  packed: GPUBuffer;
+  labels: Uint8Array;
   count: number;
 }
 
@@ -42,9 +36,6 @@ async function fetchBytes(url: string): Promise<ArrayBuffer> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`fetch ${url} → ${res.status} ${res.statusText}`);
   const ab = await res.arrayBuffer();
-  // Some static servers send `.gz` files with `Content-Encoding: gzip`, so the
-  // browser has already inflated the body. Only decompress if the bytes are
-  // still gzip-framed (magic 0x1f 0x8b) — otherwise we'd double-decompress.
   const head = new Uint8Array(ab, 0, Math.min(2, ab.byteLength));
   if (head.length >= 2 && head[0] === 0x1f && head[1] === 0x8b) {
     return await gunzip(ab);
@@ -61,7 +52,7 @@ interface ImageFile {
 
 function parseImages(buf: ArrayBuffer): ImageFile {
   const dv = new DataView(buf);
-  const magic = dv.getUint32(0, false); // IDX is big-endian
+  const magic = dv.getUint32(0, false);
   if (magic !== 0x803) throw new Error(`bad image magic 0x${magic.toString(16)} (expected 0x803)`);
   const count = dv.getUint32(4, false);
   const rows = dv.getUint32(8, false);
@@ -80,7 +71,6 @@ function parseLabels(buf: ArrayBuffer): { count: number; data: Uint8Array } {
 }
 
 function uploadPacked(device: GPUDevice, bytes: Uint8Array, label: string): GPUBuffer {
-  // The GPU buffer must be a multiple of 4 bytes to be read as array<u32>.
   const rem = bytes.byteLength % 4;
   let src = bytes;
   if (rem !== 0) {
@@ -140,7 +130,6 @@ export interface MnistRaw {
   pixels: number;
 }
 
-/** Fetch + parse MNIST to CPU arrays only (no GPU device). Used by the CPU fallback. */
 export async function fetchMnistRaw(onProgress?: LoadProgress): Promise<MnistRaw> {
   onProgress?.('fetching IDX files…');
   const [triBuf, trlBuf, teiBuf, telBuf] = await Promise.all([

@@ -1,9 +1,3 @@
-// CPU fallback panel. When WebGPU is unavailable (or forced via ?cpu=1) the demo
-// still trains: a small MLP runs on the CPU via the gradient-checked reference
-// ops, in cooperative chunks (setTimeout) so the UI stays responsive. Shows a
-// live loss curve, accuracy, and sample predictions — proof the engine runs
-// everywhere, just slower than the GPU.
-
 import { useEffect, useRef, useState } from 'react';
 import { fetchMnistRaw } from '../data/mnist';
 import { CpuMlp, gatherBatchCpu } from '../nn/cpu';
@@ -83,7 +77,6 @@ export default function CpuTrainer({ forced }: { forced: boolean }) {
 
       const finish = () => {
         const testAcc = evalTest();
-        // predictions on the first batch of test digits
         for (let i = 0; i < BATCH; i++) {
           idx[i] = i;
           lab[i] = data!.test.labels[i];

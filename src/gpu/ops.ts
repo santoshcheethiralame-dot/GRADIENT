@@ -1,11 +1,3 @@
-// High-level GPU ops. Each op compiles (and caches) its compute pipeline, binds
-// the input/output GpuTensors, records a compute pass, and submits it on the
-// shared queue. Pipelines/modules are cached per-device so repeated calls in a
-// training loop don't recompile shaders.
-//
-// Submissions are ordered on the single queue, so chaining ops without awaiting
-// between them is safe: each op's reads see the previous op's writes.
-
 import { GpuTensor } from './tensor';
 import matmulNaiveSrc from './shaders/matmul.wgsl?raw';
 import matmulTiledSrc from './shaders/matmul_tiled.wgsl?raw';
@@ -28,10 +20,8 @@ import causalSoftmaxSrc from './shaders/causal_softmax.wgsl?raw';
 import geluSrc from './shaders/gelu.wgsl?raw';
 import addSrc from './shaders/add.wgsl?raw';
 
-const WORKGROUP = 16; // matches @workgroup_size(16,16) in the 2-D shaders
-const WG1D = 64; // matches @workgroup_size(64) in the 1-D shaders
-
-// ---- pipeline / module cache (per device) ----
+const WORKGROUP = 16;
+const WG1D = 64;
 
 interface DeviceCaches {
   modules: Map<string, GPUShaderModule>;
@@ -54,7 +44,6 @@ function getModule(device: GPUDevice, key: string, code: string): GPUShaderModul
   let m = modules.get(key);
   if (!m) {
     m = device.createShaderModule({ label: key, code });
-    // Surface WGSL compile errors with line/column — invaluable while authoring.
     void m.getCompilationInfo().then((info) => {
       for (const msg of info.messages) {
         if (msg.type === 'error') {
@@ -86,9 +75,6 @@ function getComputePipeline(
   return p;
 }
 
-// ---- small buffer helpers ----
-
-/** 16-byte uniform buffer holding up to four u32s (shapes/counts). */
 function metaBuffer(device: GPUDevice, values: number[]): GPUBuffer {
   const arr = new Uint32Array(4);
   for (let i = 0; i < values.length && i < 4; i++) arr[i] = values[i] >>> 0;
@@ -101,7 +87,6 @@ function metaBuffer(device: GPUDevice, values: number[]): GPUBuffer {
   return buf;
 }
 
-/** Uniform buffer with a mixed u32/f32 layout, written via a DataView callback. */
 function makeUniform(device: GPUDevice, byteLength: number, fill: (dv: DataView) => void): GPUBuffer {
   const ab = new ArrayBuffer(byteLength);
   fill(new DataView(ab));
@@ -114,7 +99,6 @@ function makeUniform(device: GPUDevice, byteLength: number, fill: (dv: DataView)
   return buf;
 }
 
-/** Storage buffer of u32 (e.g. integer class labels). */
 export function createU32Buffer(device: GPUDevice, data: Uint32Array, label = 'u32'): GPUBuffer {
   const buf = device.createBuffer({
     label,
@@ -124,8 +108,6 @@ export function createU32Buffer(device: GPUDevice, data: Uint32Array, label = 'u
   device.queue.writeBuffer(buf, 0, data as Uint32Array<ArrayBuffer>);
   return buf;
 }
-
-// ---- dispatch helpers ----
 
 function dispatch1D(
   device: GPUDevice,
@@ -170,10 +152,6 @@ function dispatch2D(
   device.queue.submit([encoder.finish()]);
 }
 
-// =====================================================================
-// FORWARD
-// =====================================================================
-
 export type MatmulVariant = 'naive' | 'tiled';
 
 export interface MatmulOptions {
@@ -181,7 +159,6 @@ export interface MatmulOptions {
   out?: GpuTensor;
 }
 
-/** C[M,N] = A[M,K] @ B[K,N]. */
 export function matmul(
   device: GPUDevice,
   a: GpuTensor,
@@ -217,7 +194,6 @@ export function matmul(
   return out;
 }
 
-// elementwise (1 input)
 function elementwise(
   device: GPUDevice,
   key: string,
@@ -241,7 +217,6 @@ function elementwise(
   return o;
 }
 
-// elementwise (2 inputs → 1 output), used by the backward activations
 function elementwise2(
   device: GPUDevice,
   key: string,
@@ -267,17 +242,14 @@ function elementwise2(
   return o;
 }
 
-/** out = max(0, x). */
 export function relu(device: GPUDevice, x: GpuTensor, out?: GpuTensor): GpuTensor {
   return elementwise(device, 'relu', reluSrc, x, out);
 }
 
-/** out = 1 / (1 + exp(-x)). */
 export function sigmoid(device: GPUDevice, x: GpuTensor, out?: GpuTensor): GpuTensor {
   return elementwise(device, 'sigmoid', sigmoidSrc, x, out);
 }
 
-/** y[i,j] += bias[j], bias broadcast over rows. Mutates and returns y. */
 export function biasAdd(device: GPUDevice, y: GpuTensor, bias: GpuTensor): GpuTensor {
   if (y.shape.length !== 2) throw new Error('biasAdd: y must be 2-D');
   const [M, N] = y.shape;
@@ -298,7 +270,6 @@ export function biasAdd(device: GPUDevice, y: GpuTensor, bias: GpuTensor): GpuTe
   return y;
 }
 
-/** Row-wise softmax over the last dimension. */
 export function softmax(device: GPUDevice, x: GpuTensor, out?: GpuTensor): GpuTensor {
   if (x.shape.length !== 2) throw new Error('softmax: input must be 2-D [rows, classes]');
   const [M, N] = x.shape;
@@ -317,7 +288,6 @@ export function softmax(device: GPUDevice, x: GpuTensor, out?: GpuTensor): GpuTe
   return o;
 }
 
-/** Per-sample cross-entropy: losses[i] = -log(probs[i, labels[i]]). Returns [M]. */
 export function crossEntropy(
   device: GPUDevice,
   probs: GpuTensor,
@@ -342,11 +312,6 @@ export function crossEntropy(
   return losses;
 }
 
-// =====================================================================
-// BACKWARD
-// =====================================================================
-
-/** C[K,N] = Aᵀ @ B, with A [M,K], B [M,N]. The weight gradient dW = Xᵀ @ dY. */
 export function matmulATB(device: GPUDevice, a: GpuTensor, b: GpuTensor, out?: GpuTensor): GpuTensor {
   const [M, K] = a.shape;
   const [M2, N] = b.shape;
@@ -368,7 +333,6 @@ export function matmulATB(device: GPUDevice, a: GpuTensor, b: GpuTensor, out?: G
   return o;
 }
 
-/** C[M,K] = A @ Bᵀ, with A [M,N], B [K,N]. The input gradient dX = dY @ Wᵀ. */
 export function matmulABT(device: GPUDevice, a: GpuTensor, b: GpuTensor, out?: GpuTensor): GpuTensor {
   const [M, N] = a.shape;
   const [K, N2] = b.shape;
@@ -390,7 +354,6 @@ export function matmulABT(device: GPUDevice, a: GpuTensor, b: GpuTensor, out?: G
   return o;
 }
 
-/** db[n] = Σ_m dY[m,n] — reduce the gradient over the batch. Returns [N]. */
 export function biasBackward(device: GPUDevice, dY: GpuTensor, out?: GpuTensor): GpuTensor {
   if (dY.shape.length !== 2) throw new Error('biasBackward: dY must be 2-D');
   const [M, N] = dY.shape;
@@ -409,7 +372,6 @@ export function biasBackward(device: GPUDevice, dY: GpuTensor, out?: GpuTensor):
   return o;
 }
 
-/** dX = dOut ⊙ (fwd > 0). `fwd` is the ReLU forward input. */
 export function reluBackward(
   device: GPUDevice,
   dOut: GpuTensor,
@@ -419,7 +381,6 @@ export function reluBackward(
   return elementwise2(device, 'relu_backward', reluBackwardSrc, dOut, fwd, out);
 }
 
-/** dX = dOut ⊙ y ⊙ (1 - y). `y` is the sigmoid forward output. */
 export function sigmoidBackward(
   device: GPUDevice,
   dOut: GpuTensor,
@@ -429,7 +390,6 @@ export function sigmoidBackward(
   return elementwise2(device, 'sigmoid_backward', sigmoidBackwardSrc, dOut, y, out);
 }
 
-/** dLogits = (probs - onehot(labels)) / M. The fused softmax+CE gradient. */
 export function softmaxCeBackward(
   device: GPUDevice,
   probs: GpuTensor,
@@ -454,11 +414,6 @@ export function softmaxCeBackward(
   return o;
 }
 
-// =====================================================================
-// OPTIMIZERS
-// =====================================================================
-
-/** In-place SGD step: w -= lr · g. */
 export function sgdStep(device: GPUDevice, w: GpuTensor, g: GpuTensor, lr: number): void {
   if (w.size !== g.size) throw new Error(`sgdStep: size mismatch ${w.size} vs ${g.size}`);
   const u = makeUniform(device, 16, (dv) => {
@@ -483,11 +438,10 @@ export interface AdamStepParams {
   beta1: number;
   beta2: number;
   eps: number;
-  bc1: number; // 1 - beta1^t
-  bc2: number; // 1 - beta2^t
+  bc1: number;
+  bc2: number;
 }
 
-/** In-place Adam step. `m` and `v` are the persistent moment buffers for `w`. */
 export function adamStep(
   device: GPUDevice,
   w: GpuTensor,
@@ -520,15 +474,6 @@ export function adamStep(
   );
 }
 
-// =====================================================================
-// DATA
-// =====================================================================
-
-/**
- * Gather a [batch, pixels] f32 mini-batch from a packed-uint8 dataset buffer.
- * `packed` holds the raw uint8 pixel stream (4 pixels per u32); `indices` is a
- * u32 buffer of image indices. Values are normalized to [0,1].
- */
 export function gather(
   device: GPUDevice,
   packed: GPUBuffer,
@@ -553,16 +498,10 @@ export function gather(
   return o;
 }
 
-// =====================================================================
-// TRANSFORMER (nano-GPT GPU forward)
-// =====================================================================
-
-/** out = gelu(x), tanh approximation. */
 export function gelu(device: GPUDevice, x: GpuTensor, out?: GpuTensor): GpuTensor {
   return elementwise(device, 'gelu', geluSrc, x, out);
 }
 
-/** out = a + b, elementwise (matching shapes). Used for residual connections. */
 export function addTensors(
   device: GPUDevice,
   a: GpuTensor,
@@ -572,7 +511,6 @@ export function addTensors(
   return elementwise2(device, 'add', addSrc, a, b, out);
 }
 
-/** Row-wise layer norm with affine params γ, β (both [N]). */
 export function layerNorm(
   device: GPUDevice,
   x: GpuTensor,
@@ -600,8 +538,6 @@ export function layerNorm(
   return o;
 }
 
-/** Causal softmax over a square [T×T] score matrix. Logits are scaled by
- *  `scale` first; row i attends to keys 0..i, future positions are zeroed. */
 export function causalSoftmax(
   device: GPUDevice,
   scores: GpuTensor,

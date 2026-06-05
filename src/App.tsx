@@ -69,10 +69,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (booted.current) return; // guard double-invoke
+    if (booted.current) return;
     booted.current = true;
     if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('cpu')) {
-      setPhase({ kind: 'cpu' }); // forced CPU mode — skip WebGPU entirely
+      setPhase({ kind: 'cpu' });
       return;
     }
     (async () => {

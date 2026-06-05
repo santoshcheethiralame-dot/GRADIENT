@@ -2,7 +2,7 @@
 
 **A neural network that trains entirely on your GPU, in the browser** — no Python, no server, no WASM. The forward pass, backpropagation, and the optimizer are all WebGPU compute shaders (WGSL) dispatched from TypeScript. Open the page and watch it learn, live, on your own graphics card.
 
-🔗 **[Live demo](https://santoshcheethiralame-dot.github.io/GRADIENT/)** · WebGPU / WGSL · React + TypeScript
+**[Live demo](https://santoshcheethiralame-dot.github.io/GRADIENT/)** · WebGPU / WGSL · React + TypeScript
 
 > **Status: complete.** The full stack runs on WebGPU and trains two models — a 2-layer MLP on **MNIST** (~97% test accuracy) and a from-scratch **nano-GPT** char transformer that learns to write. Every GPU kernel is diffed against an f64 CPU oracle and the backward pass is numerical-gradient-checked, all re-run on each page load: **44/44 checks pass**.
 

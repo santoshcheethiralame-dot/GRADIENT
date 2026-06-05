@@ -1,8 +1,3 @@
-// Row-wise softmax with the max-subtraction stability trick:
-//   out[i,j] = exp(x[i,j] - max_j x[i,:]) / sum_j exp(x[i,j] - max_j x[i,:])
-// One invocation per row, looping over the N classes (small for classifiers).
-// Subtracting the row max keeps exp() arguments <= 0, so no overflow.
-
 struct Dims {
   M: u32,
   N: u32,
@@ -22,13 +17,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   }
   let base = row * dims.N;
 
-  // 1) row max
   var m = inp[base];
   for (var j = 1u; j < dims.N; j = j + 1u) {
     m = max(m, inp[base + j]);
   }
 
-  // 2) exponentiate shifted logits, accumulate the normalizer
   var s = 0.0;
   for (var j = 0u; j < dims.N; j = j + 1u) {
     let e = exp(inp[base + j] - m);
@@ -36,7 +29,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     s = s + e;
   }
 
-  // 3) normalize
   let inv = 1.0 / s;
   for (var j = 0u; j < dims.N; j = j + 1u) {
     outp[base + j] = outp[base + j] * inv;

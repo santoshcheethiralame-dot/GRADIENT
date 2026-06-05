@@ -1,8 +1,3 @@
-// A 2-layer MLP (one hidden ReLU layer, softmax output) whose forward and
-// backward passes run entirely on the GPU. All tensors — params, activations,
-// gradients — are allocated once for a fixed batch size and reused every step
-// (the "allocate once, reuse" pattern). Phase 4 adds an optimizer on top.
-
 import { GpuTensor } from '../gpu/tensor';
 import {
   matmul,
@@ -35,27 +30,23 @@ export class Mlp {
   readonly device: GPUDevice;
   readonly dims: MlpDims;
 
-  // parameters
   readonly W1: GpuTensor;
   readonly b1: GpuTensor;
   readonly W2: GpuTensor;
   readonly b2: GpuTensor;
 
-  // parameter gradients (+ input gradient)
   readonly dW1: GpuTensor;
   readonly db1: GpuTensor;
   readonly dW2: GpuTensor;
   readonly db2: GpuTensor;
   readonly dX: GpuTensor;
 
-  // forward-pass caches
-  readonly Z1: GpuTensor; // pre-activation (hidden)
-  readonly A1: GpuTensor; // ReLU activation
-  readonly Z2: GpuTensor; // logits
-  readonly P: GpuTensor; // softmax probabilities
-  readonly losses: GpuTensor; // per-sample CE
+  readonly Z1: GpuTensor;
+  readonly A1: GpuTensor;
+  readonly Z2: GpuTensor;
+  readonly P: GpuTensor;
+  readonly losses: GpuTensor;
 
-  // backward intermediates
   readonly dZ2: GpuTensor;
   readonly dA1: GpuTensor;
   readonly dZ1: GpuTensor;
@@ -102,20 +93,18 @@ export class Mlp {
     ];
   }
 
-  /** X[B,D0] -> probs[B,C]. Caches Z1, A1, Z2, P for the backward pass. */
   forward(X: GpuTensor): GpuTensor {
     const d = this.device;
-    matmul(d, X, this.W1, { out: this.Z1 }); // Z1 = X @ W1
-    biasAdd(d, this.Z1, this.b1); //            Z1 += b1
-    relu(d, this.Z1, this.A1); //               A1 = relu(Z1)
-    matmul(d, this.A1, this.W2, { out: this.Z2 }); // Z2 = A1 @ W2
-    biasAdd(d, this.Z2, this.b2); //            Z2 += b2
-    softmax(d, this.Z2, this.P); //             P = softmax(Z2)
+    matmul(d, X, this.W1, { out: this.Z1 });
+    biasAdd(d, this.Z1, this.b1);
+    relu(d, this.Z1, this.A1);
+    matmul(d, this.A1, this.W2, { out: this.Z2 });
+    biasAdd(d, this.Z2, this.b2);
+    softmax(d, this.Z2, this.P);
     this.lastX = X;
     return this.P;
   }
 
-  /** Forward + cross-entropy; returns the mean loss over the batch (one readback). */
   async forwardLoss(X: GpuTensor, labels: GPUBuffer): Promise<number> {
     this.forward(X);
     crossEntropy(this.device, this.P, labels, this.losses);
@@ -125,26 +114,23 @@ export class Mlp {
     return s / l.length;
   }
 
-  /** Backprop from the cached forward state. Fills dW1, db1, dW2, db2, dX. */
   backward(labels: GPUBuffer): void {
     if (!this.lastX) throw new Error('backward() called before forward()');
     const d = this.device;
-    softmaxCeBackward(d, this.P, labels, this.dZ2); // dZ2 = (P - onehot) / B
-    matmulATB(d, this.A1, this.dZ2, this.dW2); //     dW2 = A1ᵀ @ dZ2
-    biasBackward(d, this.dZ2, this.db2); //           db2 = Σ_b dZ2
-    matmulABT(d, this.dZ2, this.W2, this.dA1); //     dA1 = dZ2 @ W2ᵀ
-    reluBackward(d, this.dA1, this.Z1, this.dZ1); //  dZ1 = dA1 ⊙ (Z1 > 0)
-    matmulATB(d, this.lastX, this.dZ1, this.dW1); //  dW1 = Xᵀ @ dZ1
-    biasBackward(d, this.dZ1, this.db1); //           db1 = Σ_b dZ1
-    matmulABT(d, this.dZ1, this.W1, this.dX); //      dX  = dZ1 @ W1ᵀ
+    softmaxCeBackward(d, this.P, labels, this.dZ2);
+    matmulATB(d, this.A1, this.dZ2, this.dW2);
+    biasBackward(d, this.dZ2, this.db2);
+    matmulABT(d, this.dZ2, this.W2, this.dA1);
+    reluBackward(d, this.dA1, this.Z1, this.dZ1);
+    matmulATB(d, this.lastX, this.dZ1, this.dW1);
+    biasBackward(d, this.dZ1, this.db1);
+    matmulABT(d, this.dZ1, this.W1, this.dX);
   }
 
-  /** Learnable parameters, in a fixed order. */
   params(): GpuTensor[] {
     return [this.W1, this.b1, this.W2, this.b2];
   }
 
-  /** Gradients, in the same order as params(). */
   grads(): GpuTensor[] {
     return [this.dW1, this.db1, this.dW2, this.db2];
   }

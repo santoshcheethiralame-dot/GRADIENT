@@ -1,7 +1,3 @@
-// Per-sample cross-entropy from softmax probabilities and integer class labels:
-//   loss[i] = -log(p[i, label[i]])
-// Probability is clamped away from 0 to avoid -inf. One invocation per sample.
-
 struct Dims {
   M: u32,
   N: u32,

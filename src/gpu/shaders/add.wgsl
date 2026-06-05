@@ -1,6 +1,3 @@
-// Elementwise add: out[i] = a[i] + b[i]. Used for transformer residual adds.
-// One invocation per element.
-
 struct Dims {
   n: u32,
   _p0: u32,

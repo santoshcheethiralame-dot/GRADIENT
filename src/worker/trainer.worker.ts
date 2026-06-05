@@ -1,10 +1,4 @@
 /// <reference lib="webworker" />
-// The training worker. Owns its own GPUDevice (one per context), loads MNIST,
-// and runs an interruptible continuous training loop. Training proceeds in small
-// chunks scheduled via setTimeout(0) so incoming control messages (pause/reset/
-// infer) are processed between chunks. Metrics and a probe sample's activations
-// are posted back for the live UI; the UI throttles rendering with rAF.
-
 import { getGpuContext } from '../gpu/device';
 import { GpuTensor } from '../gpu/tensor';
 import { gather, createU32Buffer } from '../gpu/ops';
@@ -23,14 +17,14 @@ function post(msg: OutMsg, transfer: Transferable[] = []): void {
 
 const B = 64;
 const C = 10;
-const CHUNK = 8; // training steps between yields to the message queue
+const CHUNK = 8;
 
 let device: GPUDevice;
 let data: MnistData | null = null;
 let mlp: Mlp | null = null;
 let opt: Adam | null = null;
 let running = false;
-let infering = false; // pauses the train loop so inference reads its own forward pass
+let infering = false;
 let step = 0;
 let hiddenDim = 64;
 let lr = 0.005;
@@ -43,7 +37,7 @@ const idxArr = new Uint32Array(B);
 const labArr = new Uint32Array(B);
 let rng = mulberry32(1);
 
-let probeNorm = new Float32Array(0); // fixed probe image (test #0) for the heatmaps
+let probeNorm = new Float32Array(0);
 let probeLabel = 0;
 
 function buildModel(): void {
@@ -118,7 +112,6 @@ function sampleTrainBatch(): void {
 async function trainChunk(): Promise<void> {
   if (!running || !mlp || !opt || !data) return;
   if (infering) {
-    // an inference is mid-flight; yield the shared buffers and retry shortly
     setTimeout(trainChunk, 0);
     return;
   }
@@ -159,8 +152,6 @@ async function postActivations(): Promise<void> {
   ]);
 }
 
-// One test pass that yields both the test accuracy and the 2-D embedding of the
-// hidden-layer activations (PCA), so the scatter evolves as the net trains.
 async function postEval(): Promise<void> {
   if (!mlp || !data) return;
   const H = hiddenDim;
@@ -209,9 +200,6 @@ async function handleInfer(pixels: Float32Array): Promise<void> {
   }
 }
 
-// Sample the loss on a G×G grid around the current weights along two random,
-// filter-normalized directions (Li et al.). Perturbs the weights in place,
-// reads the loss on a fixed batch, then restores. Pauses training (infering).
 async function computeLandscape(): Promise<void> {
   if (!mlp || !data) return;
   infering = true;
@@ -232,14 +220,13 @@ async function computeLandscape(): Promise<void> {
           dn += g * g;
           wn += w[i] * w[i];
         }
-        const scale = Math.sqrt(wn) / (Math.sqrt(dn) || 1); // match the weight norm
+        const scale = Math.sqrt(wn) / (Math.sqrt(dn) || 1);
         for (let i = 0; i < w.length; i++) d[i] *= scale;
         return d;
       });
     const d1 = makeDir();
     const d2 = makeDir();
 
-    // fixed probe batch (first B train images)
     for (let i = 0; i < B; i++) {
       idxArr[i] = i;
       labArr[i] = data.train.labels[i];

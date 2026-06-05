@@ -1,9 +1,3 @@
-// Self-verification harness. Every GPU kernel is run against the f64 CPU oracle
-// across a spread of shapes (including non-multiples of the tile size, to
-// exercise boundary masking). The backward pass is additionally gated by
-// numerical gradient checking. Runs on app load so correctness is proven in the
-// user's real browser, not just asserted.
-
 import { getGpuContext } from './device';
 import { GpuTensor } from './tensor';
 import {
@@ -41,8 +35,8 @@ import {
 } from '../nn/nanogpt';
 import { nanoGptGpuForward } from '../nn/nanogpt-gpu';
 
-const TOL = 1e-3; // generous headroom for f32 vs f64 accumulation
-const GRAD_TOL = 2e-2; // central-difference + f32 readback noise
+const TOL = 1e-3;
+const GRAD_TOL = 2e-2;
 
 export type CheckGroup =
   | 'matmul'
@@ -66,7 +60,6 @@ export interface CheckResult {
   throughput?: string;
 }
 
-/** Result of the synthetic training demo — the "it actually learns" proof. */
 export interface TrainingResult {
   arch: string;
   optimizer: string;
@@ -86,7 +79,6 @@ export interface SelfTestReport {
   allPassed: boolean;
 }
 
-// Deterministic PRNG (mulberry32) so reported errors are reproducible.
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
@@ -123,8 +115,6 @@ function verdict(
   };
 }
 
-// ---- matmul ----
-
 async function matmulCheck(M: number, K: number, N: number, variant: MatmulVariant): Promise<CheckResult> {
   const { device } = await getGpuContext();
   const rng = mulberry32(1234);
@@ -148,8 +138,6 @@ async function matmulCheck(M: number, K: number, N: number, variant: MatmulVaria
   if (gflops >= 1) res.throughput = `${gflops.toFixed(1)} GF/s`;
   return res;
 }
-
-// ---- forward: elementwise activations ----
 
 async function activationCheck(
   name: string,
@@ -234,8 +222,6 @@ async function crossEntropyCheck(M = 64, N = 10, seed = 17): Promise<CheckResult
   return verdict('forward', 'cross-entropy', `${M} samples · ${N} classes`, m, ms);
 }
 
-// ---- composed forward (full MLP) ----
-
 async function mlpForwardCheck(seed = 23): Promise<CheckResult> {
   const { device } = await getGpuContext();
   const B = 8, D0 = 16, D1 = 12, C = 10;
@@ -293,8 +279,6 @@ async function mlpForwardCheck(seed = 23): Promise<CheckResult> {
     TOL * 2,
   );
 }
-
-// ---- backward ops (GPU vs CPU oracle) ----
 
 async function matmulATBCheck(M = 64, K = 32, N = 48, seed = 41): Promise<CheckResult> {
   const { device } = await getGpuContext();
@@ -376,7 +360,7 @@ async function sigmoidBackwardCheck(M = 64, N = 64, seed = 59): Promise<CheckRes
   const { device } = await getGpuContext();
   const rng = mulberry32(seed);
   const dOut = randRange(M * N, 1, rng);
-  const y = ref.sigmoidCpu(randRange(M * N, 3, rng)); // valid y ∈ (0,1)
+  const y = ref.sigmoidCpu(randRange(M * N, 3, rng));
   const tdOut = GpuTensor.fromArray(device, dOut, [M, N]);
   const ty = GpuTensor.fromArray(device, y, [M, N]);
 
@@ -416,8 +400,6 @@ async function softmaxCeBackwardCheck(M = 64, N = 10, seed = 61): Promise<CheckR
   return verdict('backward', 'softmax+CE backward', `(p − onehot)/M → [${M}×${N}]`, m, ms);
 }
 
-// ---- gradient check (numerical vs analytic, end-to-end) ----
-
 async function gradCheckSuite(seed = 31): Promise<CheckResult[]> {
   const { device } = await getGpuContext();
   const B = 4, D0 = 5, D1 = 4, C = 3;
@@ -437,7 +419,6 @@ async function gradCheckSuite(seed = 31): Promise<CheckResult[]> {
   const X = GpuTensor.fromArray(device, Xd, [B, D0], { label: 'X' });
   const labelBuf = createU32Buffer(device, labels, 'labels');
 
-  // analytic gradients from one forward + backward
   await mlp.forwardLoss(X, labelBuf);
   mlp.backward(labelBuf);
 
@@ -469,8 +450,6 @@ async function gradCheckSuite(seed = 31): Promise<CheckResult[]> {
   X.destroy();
   return results;
 }
-
-// ---- optimizers (GPU vs CPU oracle) ----
 
 async function sgdCheck(n = 256, seed = 67): Promise<CheckResult> {
   const { device } = await getGpuContext();
@@ -516,14 +495,11 @@ async function adamCheck(n = 256, steps = 3, seed = 71): Promise<CheckResult> {
   return verdict('optim', `Adam ×${steps}`, `${n} params · m,v + bias-correction`, m, ms);
 }
 
-// ---- training demo (synthetic data, full-batch) ----
-
 async function trainingDemo(): Promise<TrainingResult> {
   const { device } = await getGpuContext();
   const D0 = 16, D1 = 32, C = 4, N = 256, STEPS = 120;
   const ds = makeBlobs(N, D0, C, { seed: 2, spread: 0.7, separation: 3 });
 
-  // He init for the ReLU layer; zero biases.
   const rng = mulberry32(99);
   const heInit = (fanIn: number, len: number): Float32Array => {
     const std = Math.sqrt(2 / fanIn);
@@ -544,16 +520,15 @@ async function trainingDemo(): Promise<TrainingResult> {
   const opt = new Adam(device, mlp.params(), { lr: 0.02 });
 
   const t0 = performance.now();
-  let loss = await mlp.forwardLoss(X, labelBuf); // caches P at the initial params
+  let loss = await mlp.forwardLoss(X, labelBuf);
   const initialLoss = loss;
   const lossHistory: number[] = [loss];
   for (let s = 0; s < STEPS; s++) {
-    mlp.backward(labelBuf); // uses the P cached by the most recent forwardLoss
+    mlp.backward(labelBuf);
     opt.step(mlp.grads());
-    loss = await mlp.forwardLoss(X, labelBuf); // forward at updated params
+    loss = await mlp.forwardLoss(X, labelBuf);
     lossHistory.push(loss);
   }
-  // accuracy from the final cached probabilities
   const P = await mlp.P.toArray();
   const acc = ref.accuracy(P, ds.labels, N, C);
   const ms = performance.now() - t0;
@@ -575,8 +550,6 @@ async function trainingDemo(): Promise<TrainingResult> {
     pass: loss < 0.3 && acc > 0.9,
   };
 }
-
-// ---- data pipeline (gather, synthetic — no network) ----
 
 async function gatherCheck(images = 20, pixels = 16, batch = 5, seed = 83): Promise<CheckResult> {
   const { device } = await getGpuContext();
@@ -609,17 +582,6 @@ async function gatherCheck(images = 20, pixels = 16, batch = 5, seed = 83): Prom
   return verdict('data', 'gather batch', `${batch}×${pixels} from ${images} imgs · uint8→f32/255`, m, ms);
 }
 
-// ---- nano-GPT (char transformer: forward · backprop · training, CPU) ----
-// Forward has no GPU oracle, so we assert the architecture's defining
-// invariants (strict causality, normalized softmax, layer-norm, in-vocab
-// generation). The backward pass IS gradient-checked — numerical vs. analytic,
-// exactly like the MLP — and a short training run proves it actually learns.
-
-// Numerical gradient check on a tiny model: differentiate the loss w.r.t. each
-// parameter by central differences and compare to the analytic backward().
-// A larger init makes attention sharp so gradients are healthy; we verify only
-// the well-conditioned components (|g| above the f32 finite-difference noise
-// floor) — sub-threshold gradients can't be differenced reliably and are skipped.
 function nanoGptGradCheck(): { map: Record<string, { rel: number; n: number }>; ms: number } {
   const tok = new CharTokenizer('the quick brown fox jumps over.');
   const cfg = { vocab: tok.vocab, dEmbed: 8, dFF: 16, blockSize: 8 };
@@ -630,10 +592,10 @@ function nanoGptGradCheck(): { map: Record<string, { rel: number; n: number }>; 
   const targets = full.slice(1, T + 1);
 
   model.zeroGrad();
-  model.backward(model.forwardCache(ids), targets); // analytic gradients
+  model.backward(model.forwardCache(ids), targets);
 
   const eps = 1e-3;
-  const GT = 1e-2; // only check entries whose gradient clears the noise floor
+  const GT = 1e-2;
   const map: Record<string, { rel: number; n: number }> = {};
   const t0 = performance.now();
   for (const p of model.params()) {
@@ -657,8 +619,6 @@ function nanoGptGradCheck(): { map: Record<string, { rel: number; n: number }>; 
   return { map, ms: performance.now() - t0 };
 }
 
-// Train a small model with Adam until it overfits a sentence, then read it back
-// greedily — the end-to-end proof that the verified gradients actually learn.
 function nanoGptTrainDemo(): {
   initial: number;
   finalLoss: number;
@@ -671,7 +631,7 @@ function nanoGptTrainDemo(): {
   const tok = new CharTokenizer(text);
   const cfg = { vocab: tok.vocab, dEmbed: 32, dFF: 64, blockSize: 16 };
   const model = new NanoGpt(cfg, 3);
-  const data = tok.encode(text + text); // a little repetition to train over
+  const data = tok.encode(text + text);
   const T = cfg.blockSize;
   const rng = mulberry32(5);
 
@@ -685,7 +645,6 @@ function nanoGptTrainDemo(): {
   const STEPS = 450;
 
   const vocab = cfg.vocab;
-  // stable loss measure: mean CE over windows tiled across the whole corpus
   const corpusLoss = (): number => {
     let sum = 0;
     let count = 0;
@@ -748,7 +707,6 @@ function nanoGptCheckSuite(): CheckResult[] {
   const ids: number[] = [];
   for (let i = 0; i < T; i++) ids.push(base[i % base.length]);
 
-  // 1) strict causality: editing token p must not perturb logits at positions < p.
   {
     const t0 = performance.now();
     const l1 = model.forward(ids);
@@ -772,7 +730,6 @@ function nanoGptCheckSuite(): CheckResult[] {
     });
   }
 
-  // 2) next-char distribution is a valid, normalized softmax.
   {
     const t0 = performance.now();
     const logits = model.forward(ids);
@@ -797,7 +754,6 @@ function nanoGptCheckSuite(): CheckResult[] {
     });
   }
 
-  // 3) layer norm normalizes each row to ~zero mean / unit variance.
   {
     const t0 = performance.now();
     const rows = 8;
@@ -830,7 +786,6 @@ function nanoGptCheckSuite(): CheckResult[] {
     });
   }
 
-  // 4) generation stays in-vocabulary and yields exactly the requested length.
   {
     const t0 = performance.now();
     const prompt = tok.encode('gradient');
@@ -850,9 +805,6 @@ function nanoGptCheckSuite(): CheckResult[] {
     });
   }
 
-  // 5–7) backward pass: numerical gradient check across every parameter,
-  // grouped by block. This is the real proof that backprop through softmax
-  // attention + layer-norm is correct.
   const gc = nanoGptGradCheck();
   console.info('[nano-GPT] grad-check (rel err, #entries) per param:', gc.map);
   const gradRow = (label: string, names: string[], ms: number) => {
@@ -876,7 +828,6 @@ function nanoGptCheckSuite(): CheckResult[] {
   gradRow('∂ MLP', ['Wff1', 'bff1', 'Wff2', 'bff2', 'ln2.g', 'ln2.b'], 0);
   gradRow('∂ embed + head', ['tokEmb', 'posEmb', 'head', 'lnf.g', 'lnf.b'], 0);
 
-  // 8) training: it learns. Overfit the corpus and read back a sample.
   const tr = nanoGptTrainDemo();
   console.info(
     `[nano-GPT] train loss ${tr.initial.toFixed(3)} → ${tr.finalLoss.toFixed(3)} · sample: "${tr.sample}"`,
@@ -895,16 +846,10 @@ function nanoGptCheckSuite(): CheckResult[] {
   return out;
 }
 
-// ---- nano-GPT GPU forward (increment 3) ----
-// The transformer-specific kernels verified against the f64 CPU oracle, then
-// the whole forward pass on the GPU, compared (as next-char probabilities) to
-// the CPU forward.
-
 async function transformerGpuChecks(): Promise<CheckResult[]> {
   const { device } = await getGpuContext();
   const out: CheckResult[] = [];
 
-  // GELU
   {
     const M = 32;
     const N = 32;
@@ -926,7 +871,6 @@ async function transformerGpuChecks(): Promise<CheckResult[]> {
     out.push(verdict('tfgpu', 'GELU', `${M}×${N} · tanh approx`, m, ms));
   }
 
-  // layer norm
   {
     const M = 16;
     const N = 24;
@@ -946,7 +890,6 @@ async function transformerGpuChecks(): Promise<CheckResult[]> {
     out.push(verdict('tfgpu', 'layer norm', `${M}×${N} · μ/σ + affine`, m, ms));
   }
 
-  // causal softmax
   {
     const T = 12;
     const sc = randRange(T * T, 3, mulberry32(203));
@@ -974,7 +917,6 @@ async function transformerGpuChecks(): Promise<CheckResult[]> {
     out.push(verdict('tfgpu', 'causal softmax', `${T}×${T} · masked + scaled`, m, ms));
   }
 
-  // full forward (GPU vs CPU), compared as next-char probabilities
   {
     const tok = new CharTokenizer('the quick brown fox.');
     const cfg = { vocab: tok.vocab, dEmbed: 16, dFF: 32, blockSize: 8 };
@@ -999,12 +941,10 @@ async function transformerGpuChecks(): Promise<CheckResult[]> {
   return out;
 }
 
-// ---- runner ----
-
 const MATMUL_SHAPES: Array<[number, number, number]> = [
   [1, 1, 1],
   [2, 3, 4],
-  [17, 33, 19], // non-multiples of TILE — exercises boundary masking
+  [17, 33, 19],
   [64, 128, 32],
   [128, 256, 128],
   [256, 256, 256],

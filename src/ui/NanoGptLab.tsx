@@ -1,24 +1,19 @@
-// nano-GPT increment 4: the interactive "watch it learn to write" panel.
-// Trains the char transformer live on the CPU (the gradient-checked engine from
-// nanogpt.ts) in cooperative setTimeout chunks so the UI stays responsive, and
-// streams the loss curve + the greedily-generated text as it sharpens from
-// noise into the target sentence. No GPU required — runs in every browser.
-
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CharTokenizer, NanoGpt } from '../nn/nanogpt';
 import { mulberry32 } from '../data/synthetic';
 
-const TEXT = 'the quick brown fox jumps over the lazy dog. ';
-const PROMPT = 'the q';
-const GEN = 44;
+const DEFAULT_TEXT = 'the quick brown fox jumps over the lazy dog.';
+const MAX_LEN = 56;
 const T = 20;
 const STEPS = 700;
 const CHUNK = 14;
 const LR = 0.01;
+const SEED_LEN = 5;
 
 type Phase = 'idle' | 'training' | 'done';
 
 export function NanoGptLab() {
+  const [text, setText] = useState(DEFAULT_TEXT);
   const [phase, setPhase] = useState<Phase>('idle');
   const [step, setStep] = useState(0);
   const [loss, setLoss] = useState(NaN);
@@ -31,16 +26,41 @@ export function NanoGptLab() {
     running.current = false;
   }, []);
 
+  const reset = useCallback(() => {
+    running.current = false;
+    lossHist.current = [];
+    setPhase('idle');
+    setStep(0);
+    setLoss(NaN);
+    setSample('');
+  }, []);
+
+  const onText = useCallback(
+    (v: string) => {
+      setText(v);
+      reset();
+    },
+    [reset],
+  );
+
   const train = useCallback(() => {
-    running.current = false; // cancel any in-flight run
-    const tok = new CharTokenizer(TEXT);
-    const data = tok.encode(TEXT + TEXT);
+    running.current = false;
+    const sentence = text.trim() || DEFAULT_TEXT;
+    const base = sentence + ' ';
+    let corpusText = base;
+    while (corpusText.length < 3 * T + 1) corpusText += base;
+
+    const tok = new CharTokenizer(corpusText);
+    const data = tok.encode(corpusText);
     const cfg = { vocab: tok.vocab, dEmbed: 32, dFF: 64, blockSize: T };
     const model = new NanoGpt(cfg, 3);
     const ps = model.params();
     const mv = ps.map((p) => new Float32Array(p.w.length));
     const vv = ps.map((p) => new Float32Array(p.w.length));
     const rng = mulberry32(5);
+
+    const seed = sentence.slice(0, Math.min(SEED_LEN, sentence.length));
+    const genLen = Math.min(80, sentence.length + 10);
 
     const corpusLoss = (): number => {
       let sum = 0;
@@ -54,10 +74,10 @@ export function NanoGptLab() {
         ).loss;
         n++;
       }
-      return sum / n;
+      return n ? sum / n : NaN;
     };
     const generate = (): string =>
-      tok.decode(model.generate(tok.encode(PROMPT), GEN, 0, mulberry32(0)));
+      tok.decode(model.generate(tok.encode(seed), genLen, 0, mulberry32(0)));
 
     lossHist.current = [corpusLoss()];
     setPhase('training');
@@ -103,16 +123,7 @@ export function NanoGptLab() {
       }
     };
     setTimeout(loop, 0);
-  }, []);
-
-  const reset = useCallback(() => {
-    running.current = false;
-    lossHist.current = [];
-    setPhase('idle');
-    setStep(0);
-    setLoss(NaN);
-    setSample('');
-  }, []);
+  }, [text]);
 
   useEffect(
     () => () => {
@@ -131,8 +142,9 @@ export function NanoGptLab() {
       return `${x.toFixed(2)},${y.toFixed(2)}`;
     })
     .join(' ');
-
   const pct = Math.round((step / STEPS) * 100);
+  const target = text.trim() || DEFAULT_TEXT;
+  const prompt = target.slice(0, Math.min(SEED_LEN, target.length));
 
   return (
     <section className="card nlab" id="nanogpt">
@@ -143,10 +155,22 @@ export function NanoGptLab() {
 
       <div className="nlab-grid">
         <div className="nlab-left">
-          <p className="nlab-blurb">
-            A from-scratch transformer (causal self-attention + MLP), the same gradient-checked
-            engine verified above. Hit train and watch it overfit a sentence — the greedy output
-            below morphs from noise into the target as the loss falls.
+          <label className="nlab-field">
+            <span className="nlab-label">target sentence</span>
+            <input
+              className="nlab-input"
+              type="text"
+              value={text}
+              maxLength={MAX_LEN}
+              spellCheck={false}
+              placeholder={DEFAULT_TEXT}
+              onChange={(e) => onText(e.target.value)}
+            />
+          </label>
+          <p className="nlab-reqs">
+            Type a sentence — the net memorizes it and writes it back. Lowercase and ≤ {MAX_LEN}{' '}
+            characters work best; it's a tiny 1-layer transformer trained for {STEPS} steps, then
+            seeded greedily with the first {SEED_LEN} characters.
           </p>
           <div className="nlab-controls">
             {phase === 'training' ? (
@@ -154,7 +178,7 @@ export function NanoGptLab() {
                 stop
               </button>
             ) : (
-              <button className="btn primary" onClick={train}>
+              <button className="btn primary" onClick={train} disabled={!text.trim()}>
                 {phase === 'done' ? 'train again' : 'train'}
               </button>
             )}
@@ -187,11 +211,11 @@ export function NanoGptLab() {
 
         <div className="nlab-screen">
           <div className="nlab-target">
-            target&nbsp;·&nbsp;<span>{TEXT.trim()}</span>
+            target&nbsp;·&nbsp;<span>{target}</span>
           </div>
           <div className="nlab-out">
-            <span className="nlab-prompt">{PROMPT}</span>
-            {sample.slice(PROMPT.length)}
+            <span className="nlab-prompt">{prompt}</span>
+            {sample.slice(prompt.length)}
             {phase === 'training' && <span className="nlab-caret" />}
           </div>
           <div className="nlab-tag">

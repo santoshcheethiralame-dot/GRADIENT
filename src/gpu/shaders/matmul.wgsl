@@ -1,9 +1,3 @@
-// Naive dense matmul: C[M,N] = A[M,K] @ B[K,N]
-//
-// One invocation computes one output element. Correct, simple, and a useful
-// baseline — but memory-bound: every invocation independently streams a full
-// row of A and column of B from global memory (~400-cycle latency each).
-
 struct Dims {
   M: u32,
   K: u32,
@@ -18,8 +12,8 @@ struct Dims {
 
 @compute @workgroup_size(16, 16, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-  let col = gid.x; // index along N (contiguous in C → coalesced writes)
-  let row = gid.y; // index along M
+  let col = gid.x;
+  let row = gid.y;
   if (row >= dims.M || col >= dims.N) {
     return;
   }

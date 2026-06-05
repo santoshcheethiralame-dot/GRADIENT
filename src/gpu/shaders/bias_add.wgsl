@@ -1,6 +1,3 @@
-// Bias add (in-place): Y[i,j] += bias[j], with bias broadcast across the M rows.
-// One invocation per element of Y.
-
 struct Dims {
   M: u32,
   N: u32,

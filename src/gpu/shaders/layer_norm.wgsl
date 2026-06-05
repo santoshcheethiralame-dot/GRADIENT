@@ -1,8 +1,3 @@
-// Row-wise layer norm with affine params:
-//   out[i,j] = (x[i,j] - mean_i) / sqrt(var_i + eps) * gamma[j] + beta[j]
-// One invocation per row, looping over the N features. eps = 1e-5 to match the
-// CPU reference (layerNormRows in nanogpt.ts).
-
 struct Dims {
   M: u32,
   N: u32,

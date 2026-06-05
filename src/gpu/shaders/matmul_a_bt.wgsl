@@ -1,8 +1,3 @@
-// Transposed-right matmul: C[M,K] = A @ Bᵀ, where A is [M,N] and B is [K,N].
-//   C[m,k] = Σ_n A[m,n] · B[k,n]
-// This is the input gradient dX = dY @ Wᵀ (dY is [batch,out], W is [in,out]).
-// Naive (no shared-memory tiling) — correctness first; can be tiled later.
-
 struct Dims {
   M: u32,
   N: u32,
@@ -10,15 +5,15 @@ struct Dims {
   _p: u32,
 };
 
-@group(0) @binding(0) var<storage, read>       a: array<f32>; // [M,N]
-@group(0) @binding(1) var<storage, read>       b: array<f32>; // [K,N]
-@group(0) @binding(2) var<storage, read_write> c: array<f32>; // [M,K]
+@group(0) @binding(0) var<storage, read>       a: array<f32>;
+@group(0) @binding(1) var<storage, read>       b: array<f32>;
+@group(0) @binding(2) var<storage, read_write> c: array<f32>;
 @group(0) @binding(3) var<uniform>             dims: Dims;
 
 @compute @workgroup_size(16, 16, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-  let k = gid.x; // along K
-  let m = gid.y; // along M
+  let k = gid.x;
+  let m = gid.y;
   if (m >= dims.M || k >= dims.K) {
     return;
   }

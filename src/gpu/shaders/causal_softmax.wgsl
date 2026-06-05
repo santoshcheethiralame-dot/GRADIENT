@@ -1,9 +1,3 @@
-// Causal (masked) row-wise softmax over a [T x T] score matrix, with a scale
-// applied first. Row i attends only to keys 0..i; columns > i are forced to 0.
-//   s = scores[i,j] * scale
-//   attn[i, 0..i] = softmax(s),  attn[i, j>i] = 0
-// One invocation per query row. The max-subtraction keeps exp() args <= 0.
-
 struct Cfg {
   T: u32,
   scale: f32,
@@ -22,7 +16,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     return;
   }
   let base = i * cfg.T;
-  let lim = i + 1u; // valid keys: columns 0..i
+  let lim = i + 1u;
 
   var m = inp[base] * cfg.scale;
   for (var j = 1u; j < lim; j = j + 1u) {
@@ -41,6 +35,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     outp[base + j] = outp[base + j] * inv;
   }
   for (var j = lim; j < cfg.T; j = j + 1u) {
-    outp[base + j] = 0.0; // masked future positions
+    outp[base + j] = 0.0;
   }
 }

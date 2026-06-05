@@ -1,7 +1,3 @@
-// Tiny PCA → 2-D projection (top-2 principal components via power iteration).
-// Runs on the CPU over a small [n × d] activation matrix already read back from
-// the GPU — used to project hidden-layer activations for the embedding scatter.
-
 function powerIteration(cov: Float32Array, d: number, deflate: Float32Array | null): Float32Array {
   const v = new Float32Array(d);
   let seed = 1234567;
@@ -19,7 +15,6 @@ function powerIteration(cov: Float32Array, d: number, deflate: Float32Array | nu
       for (let b = 0; b < d; b++) s += cov[row + b] * v[b];
       w[a] = s;
     }
-    // deflate against an already-found eigenvector to get the next one
     if (deflate) {
       let dot = 0;
       for (let j = 0; j < d; j++) dot += w[j] * deflate[j];
@@ -30,15 +25,12 @@ function powerIteration(cov: Float32Array, d: number, deflate: Float32Array | nu
     norm = Math.sqrt(norm) || 1;
     for (let j = 0; j < d; j++) v[j] = w[j] / norm;
   }
-  // stabilize sign (largest-magnitude component positive) so the projection
-  // doesn't arbitrarily mirror between updates
   let mi = 0;
   for (let j = 1; j < d; j++) if (Math.abs(v[j]) > Math.abs(v[mi])) mi = j;
   if (v[mi] < 0) for (let j = 0; j < d; j++) v[j] = -v[j];
   return v;
 }
 
-/** Project [n × d] data onto its top-2 principal components → [n × 2], scaled to ~[-1,1]. */
 export function pca2d(data: Float32Array, n: number, d: number): Float32Array {
   const out = new Float32Array(n * 2);
   if (n === 0 || d === 0) return out;
@@ -56,7 +48,6 @@ export function pca2d(data: Float32Array, n: number, d: number): Float32Array {
     for (let j = 0; j < d; j++) X[o + j] = data[o + j] - mean[j];
   }
 
-  // covariance C = Xᵀ X / n (symmetric)
   const cov = new Float32Array(d * d);
   for (let i = 0; i < n; i++) {
     const o = i * d;

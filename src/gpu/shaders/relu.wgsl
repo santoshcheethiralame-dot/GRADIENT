@@ -1,5 +1,3 @@
-// ReLU (out-of-place): out[i] = max(0, in[i]). One invocation per element.
-
 struct Dims {
   n: u32,
   _p0: u32,

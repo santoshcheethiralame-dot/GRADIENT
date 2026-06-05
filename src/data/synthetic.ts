@@ -1,11 +1,6 @@
-// Synthetic datasets for exercising the training loop before MNIST lands.
-// Gaussian blobs: each class is a cloud of points around a random center.
-// Well-separated centers make this reliably learnable — ideal for a convergence
-// self-test that must pass on every load.
-
 export interface Dataset {
-  X: Float32Array; // [samples * dim], row-major
-  labels: Uint32Array; // [samples]
+  X: Float32Array;
+  labels: Uint32Array;
   samples: number;
   dim: number;
   classes: number;
@@ -22,7 +17,6 @@ export function mulberry32(seed: number): () => number {
   };
 }
 
-/** Standard-normal sample via Box-Muller. */
 export function gaussian(rng: () => number): number {
   let u = 0;
   let v = 0;
@@ -33,8 +27,8 @@ export function gaussian(rng: () => number): number {
 
 export interface BlobOptions {
   seed?: number;
-  spread?: number; // per-axis stddev of each cluster
-  separation?: number; // scale of the random class centers
+  spread?: number;
+  separation?: number;
 }
 
 export function makeBlobs(

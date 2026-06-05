@@ -1,14 +1,10 @@
-// Message contract between the main thread (UI) and the training worker.
-// WebGPU lives in the worker, so all data crossing back is plain CPU arrays /
-// scalars. Float32Arrays are sent as transferables to avoid copies.
-
 export type InMsg =
   | { type: 'init' }
   | { type: 'start' }
   | { type: 'pause' }
   | { type: 'reset'; hidden: number; lr: number }
-  | { type: 'infer'; pixels: Float32Array } // [pixels] normalized, drawn digit
-  | { type: 'landscape' }; // compute a loss surface around the current weights
+  | { type: 'infer'; pixels: Float32Array }
+  | { type: 'landscape' };
 
 export interface ReadyMsg {
   type: 'ready';
@@ -37,25 +33,25 @@ export interface TestAccMsg {
 }
 export interface EmbeddingMsg {
   type: 'embedding';
-  coords: Float32Array; // [n*2] hidden activations projected to 2-D (PCA), in ~[-1,1]
-  labels: Uint8Array; // [n] true class per point
+  coords: Float32Array;
+  labels: Uint8Array;
   step: number;
 }
 export interface ActivationsMsg {
   type: 'activations';
-  input: Float32Array; // [pixels] the probe digit (normalized)
-  hidden: Float32Array; // [hidden] ReLU activations
-  probs: Float32Array; // [10] softmax
+  input: Float32Array;
+  hidden: Float32Array;
+  probs: Float32Array;
   label: number;
   pred: number;
 }
 export interface ProbsMsg {
   type: 'probs';
-  probs: Float32Array; // [10] response to an infer request
+  probs: Float32Array;
 }
 export interface LandscapeMsg {
   type: 'landscape';
-  grid: Float32Array; // [size*size] loss sampled on a 2-D grid around the weights
+  grid: Float32Array;
   size: number;
   step: number;
 }

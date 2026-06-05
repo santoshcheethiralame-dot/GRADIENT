@@ -1,6 +1,3 @@
-// Sigmoid backward: dX[i] = dOut[i] · y[i] · (1 - y[i]),
-// where y = sigmoid(forward input) is the cached forward OUTPUT.
-
 struct Dims {
   n: u32,
   _p0: u32,

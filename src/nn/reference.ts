@@ -1,9 +1,3 @@
-// CPU reference implementations — the correctness oracle for the GPU kernels.
-// Accumulation happens in f64 (JS number), so these are at least as accurate as
-// the f32 GPU shaders: any meaningful divergence indicates a GPU bug, not CPU
-// rounding. Kept deliberately simple and obviously-correct.
-
-/** C[M,N] = A[M,K] @ B[K,N], row-major. */
 export function matmulCpu(
   a: Float32Array,
   b: Float32Array,
@@ -24,7 +18,6 @@ export function matmulCpu(
   return c;
 }
 
-/** Y[i,j] + bias[j], bias broadcast across the M rows. Returns a new array. */
 export function biasAddCpu(
   y: Float32Array,
   bias: Float32Array,
@@ -40,21 +33,18 @@ export function biasAddCpu(
   return out;
 }
 
-/** ReLU, elementwise. */
 export function reluCpu(x: Float32Array): Float32Array {
   const out = new Float32Array(x.length);
   for (let i = 0; i < x.length; i++) out[i] = Math.max(0, x[i]);
   return out;
 }
 
-/** Logistic sigmoid, elementwise. */
 export function sigmoidCpu(x: Float32Array): Float32Array {
   const out = new Float32Array(x.length);
   for (let i = 0; i < x.length; i++) out[i] = 1 / (1 + Math.exp(-x[i]));
   return out;
 }
 
-/** Row-wise softmax with max-subtraction stability. */
 export function softmaxCpu(x: Float32Array, M: number, N: number): Float32Array {
   const out = new Float32Array(M * N);
   for (let i = 0; i < M; i++) {
@@ -73,7 +63,6 @@ export function softmaxCpu(x: Float32Array, M: number, N: number): Float32Array 
   return out;
 }
 
-/** Per-sample cross-entropy: -log(p[i, label[i]]). */
 export function crossEntropyCpu(
   probs: Float32Array,
   labels: Uint32Array,
@@ -88,9 +77,6 @@ export function crossEntropyCpu(
   return out;
 }
 
-// ---- backward ----
-
-/** C[K,N] = Aᵀ @ B, with A [M,K], B [M,N]. */
 export function matmulATBCpu(
   a: Float32Array,
   b: Float32Array,
@@ -109,7 +95,6 @@ export function matmulATBCpu(
   return c;
 }
 
-/** C[M,K] = A @ Bᵀ, with A [M,N], B [K,N]. */
 export function matmulABTCpu(
   a: Float32Array,
   b: Float32Array,
@@ -128,7 +113,6 @@ export function matmulABTCpu(
   return c;
 }
 
-/** db[n] = Σ_m dY[m,n]. */
 export function biasBackwardCpu(dY: Float32Array, M: number, N: number): Float32Array {
   const db = new Float32Array(N);
   for (let n = 0; n < N; n++) {
@@ -139,21 +123,18 @@ export function biasBackwardCpu(dY: Float32Array, M: number, N: number): Float32
   return db;
 }
 
-/** dX = dOut ⊙ (fwd > 0). */
 export function reluBackwardCpu(dOut: Float32Array, fwd: Float32Array): Float32Array {
   const out = new Float32Array(dOut.length);
   for (let i = 0; i < dOut.length; i++) out[i] = fwd[i] > 0 ? dOut[i] : 0;
   return out;
 }
 
-/** dX = dOut ⊙ y ⊙ (1 - y). */
 export function sigmoidBackwardCpu(dOut: Float32Array, y: Float32Array): Float32Array {
   const out = new Float32Array(dOut.length);
   for (let i = 0; i < dOut.length; i++) out[i] = dOut[i] * y[i] * (1 - y[i]);
   return out;
 }
 
-/** dLogits = (probs - onehot(labels)) / M. */
 export function softmaxCeBackwardCpu(
   probs: Float32Array,
   labels: Uint32Array,
@@ -170,9 +151,6 @@ export function softmaxCeBackwardCpu(
   return out;
 }
 
-// ---- optimizers ----
-
-/** Single SGD step: w' = w - lr·g. */
 export function sgdStepCpu(w: Float32Array, g: Float32Array, lr: number): Float32Array {
   const out = new Float32Array(w.length);
   for (let i = 0; i < w.length; i++) out[i] = w[i] - lr * g[i];
@@ -186,7 +164,6 @@ export interface AdamCpuConfig {
   eps: number;
 }
 
-/** Run T Adam steps over a sequence of gradients; returns the final weights. */
 export function adamCpu(w0: Float32Array, grads: Float32Array[], cfg: AdamCpuConfig): Float32Array {
   const n = w0.length;
   const w = w0.slice();
@@ -208,7 +185,6 @@ export function adamCpu(w0: Float32Array, grads: Float32Array[], cfg: AdamCpuCon
   return w;
 }
 
-/** Top-1 accuracy of softmax probabilities against integer labels. */
 export function accuracy(probs: Float32Array, labels: Uint32Array, M: number, N: number): number {
   let correct = 0;
   for (let i = 0; i < M; i++) {
@@ -228,10 +204,9 @@ export function accuracy(probs: Float32Array, labels: Uint32Array, M: number, N:
 
 export interface ErrorMetrics {
   maxAbsErr: number;
-  maxRelErr: number; // max abs error normalized by max |reference|
+  maxRelErr: number;
 }
 
-/** Compare a GPU result against a reference, returning worst-case errors. */
 export function compareArrays(got: Float32Array, ref: Float32Array): ErrorMetrics {
   if (got.length !== ref.length) {
     throw new Error(`length mismatch: got ${got.length}, ref ${ref.length}`);

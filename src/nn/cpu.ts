@@ -1,8 +1,3 @@
-// CPU training engine — a 2-layer MLP whose forward/backward reuse the f64
-// reference ops (the same code that serves as the GPU oracle, so it's already
-// gradient-checked). Used as a fallback when WebGPU is unavailable, so the demo
-// still trains everywhere — just slower.
-
 import * as ref from './reference';
 
 function adamUpdate(
@@ -79,7 +74,6 @@ export class CpuMlp {
     this.vb2 = z(C);
   }
 
-  /** X is [B, D0]. Returns softmax probabilities [B, C]. Caches for backward(). */
   forward(X: Float32Array): Float32Array {
     const { D0, D1, C, B } = this;
     this.Z1 = ref.biasAddCpu(ref.matmulCpu(X, this.W1, B, D0, D1), this.b1, B, D1);
@@ -96,7 +90,7 @@ export class CpuMlp {
 
   backward(labels: Uint32Array): void {
     const { D0, D1, C, B } = this;
-    const dZ2 = ref.softmaxCeBackwardCpu(this.P, labels, B, C); // (p - onehot)/B
+    const dZ2 = ref.softmaxCeBackwardCpu(this.P, labels, B, C);
     this.dW2 = ref.matmulATBCpu(this.A1, dZ2, B, D1, C);
     this.db2 = ref.biasBackwardCpu(dZ2, B, C);
     const dA1 = ref.matmulABTCpu(dZ2, this.W2, B, C, D1);
@@ -116,7 +110,6 @@ export class CpuMlp {
   }
 }
 
-/** Gather a [B, pixels] f32 batch (normalized to [0,1]) from raw uint8 image bytes. */
 export function gatherBatchCpu(
   images: Uint8Array,
   indices: Uint32Array,

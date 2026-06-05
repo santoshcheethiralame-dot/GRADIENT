@@ -1,7 +1,3 @@
-/* gradient — NEO-BRUTALIST.
-   Ivory canvas · thick black borders · hard offset shadows · chunky black type ·
-   loud purple + pink blocks. No gradients, no glass, no glow. */
-
 :root {
   --bg: #e8dec9;
   --surface: #fbf7ec;
@@ -16,7 +12,7 @@
   --pink: #ec4899;
   --pink-soft: #f9a8d4;
   --ivory: #fbf7ec;
-  --screen: #15101f; /* dark "screen" for canvases */
+  --screen: #15101f;
   --danger: #f43f5e;
 
   --bw: 2.5px;
@@ -56,7 +52,6 @@ body {
   padding: 0 26px 90px;
 }
 
-/* ---- masthead ---- */
 .masthead {
   display: flex;
   align-items: center;
@@ -132,7 +127,6 @@ body {
   color: #fff;
 }
 
-/* status pill */
 .pill {
   display: inline-flex;
   align-items: center;
@@ -182,7 +176,6 @@ body {
   }
 }
 
-/* ---- overview strip (loud, varied fills) ---- */
 .overview {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -228,7 +221,6 @@ body {
   margin-top: 8px;
 }
 
-/* ---- cards / panels ---- */
 .grid {
   display: grid;
   gap: 22px;
@@ -284,7 +276,6 @@ body {
   color: var(--muted);
 }
 
-/* key/value */
 .kv {
   display: grid;
   grid-template-columns: 150px 1fr;
@@ -307,7 +298,6 @@ body {
   word-break: break-word;
 }
 
-/* device spec grid */
 .specs {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
@@ -334,7 +324,6 @@ body {
   word-break: break-word;
 }
 
-/* ---- banners ---- */
 .banner {
   display: flex;
   align-items: center;
@@ -366,7 +355,6 @@ body {
   color: var(--muted);
 }
 
-/* ---- diagnostics ---- */
 .summary {
   display: flex;
   align-items: baseline;
@@ -462,7 +450,6 @@ table.diag .verdict.fail {
   font-weight: 700;
 }
 
-/* ---- buttons ---- */
 .btn {
   font-family: var(--disp);
   font-weight: 800;
@@ -525,7 +512,6 @@ code.inline {
   color: var(--purple-deep);
 }
 
-/* ---- reference sparkline ---- */
 .train-row {
   display: flex;
   gap: 28px;
@@ -552,7 +538,6 @@ code.inline {
   line-height: 1.55;
 }
 
-/* ---- live dashboard ---- */
 .dash-top {
   display: flex;
   justify-content: space-between;
@@ -723,7 +708,6 @@ canvas.px {
   color: var(--pink);
 }
 
-/* draw demo */
 .group-label {
   font-family: var(--disp);
   font-weight: 900;
@@ -822,7 +806,6 @@ canvas.px {
   text-align: center;
 }
 
-/* ---- embedding scatter ---- */
 .embed-row {
   display: flex;
   gap: 16px;
@@ -860,7 +843,6 @@ canvas.px {
   border: 1.5px solid var(--black);
 }
 
-/* ---- profiler bars ---- */
 .perfwrap {
   display: flex;
   align-items: center;
@@ -887,7 +869,6 @@ canvas.px {
   white-space: nowrap;
 }
 
-/* ---- CPU fallback sample predictions ---- */
 .cpu-samples {
   display: flex;
   flex-wrap: wrap;
@@ -920,7 +901,6 @@ canvas.px {
   color: var(--danger);
 }
 
-/* ---- loss landscape ---- */
 .land-row {
   display: flex;
   gap: 18px;
@@ -952,7 +932,6 @@ canvas.px {
   color: var(--muted);
 }
 
-/* ---- nano-GPT lab (CH5) ---- */
 .nlab-grid {
   display: grid;
   grid-template-columns: 1fr 1.05fr;
@@ -963,6 +942,42 @@ canvas.px {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+.nlab-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.nlab-label {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--purple-deep);
+}
+.nlab-input {
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--ivory);
+  border: var(--bw) solid var(--black);
+  border-radius: var(--radius-sm);
+  padding: 10px 13px;
+  box-shadow: 2px 2px 0 var(--black);
+  outline: none;
+}
+.nlab-input:focus {
+  border-color: var(--purple);
+  box-shadow: 2px 2px 0 var(--purple);
+}
+.nlab-reqs {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
 }
 .nlab-blurb {
   margin: 0;
@@ -1070,7 +1085,6 @@ canvas.px {
   }
 }
 
-/* ---- top nav (lab / about) ---- */
 .nav {
   display: inline-flex;
   border: var(--bw) solid var(--black);
@@ -1102,7 +1116,6 @@ canvas.px {
   color: #fff;
 }
 
-/* ---- about page ---- */
 .about {
   display: flex;
   flex-direction: column;
@@ -1386,7 +1399,6 @@ canvas.px {
   font-weight: 700;
 }
 
-/* about — stat strip (mirrors the lab overview) */
 .about-stats {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -1431,7 +1443,6 @@ canvas.px {
   color: #fff;
 }
 
-/* about — build columns */
 .build-cols {
   display: grid;
   grid-template-columns: 1fr 1fr;
