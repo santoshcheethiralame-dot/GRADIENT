@@ -137,12 +137,16 @@ function useTrainer() {
     (pixels: Float32Array) => send({ type: 'infer', pixels }, [pixels.buffer]),
     [send],
   );
+  const clearInfer = useCallback(() => setInferProbs(null), []);
 
   useEffect(() => {
     return () => workerRef.current?.terminate();
   }, []);
 
-  return { phase, status, info, error, running, inferProbs, refs, begin, pause, resume, reset, infer };
+  return {
+    phase, status, info, error, running, inferProbs, refs,
+    begin, pause, resume, reset, infer, clearInfer,
+  };
 }
 
 // ---- canvas drawing ----
@@ -168,11 +172,11 @@ function drawDigit(canvas: HTMLCanvasElement | null, input: Float32Array, side =
 // Thermal colormap: cold near-black → blue → hot amber. The UI's accent palette,
 // applied to the activations — so the heatmap and the chrome share one language.
 const THERMAL: Array<[number, [number, number, number]]> = [
-  [0.0, [18, 16, 30]],
-  [0.32, [54, 40, 96]],
-  [0.58, [124, 92, 240]],
-  [0.8, [167, 139, 250]],
-  [1.0, [216, 180, 254]],
+  [0.0, [21, 16, 31]],
+  [0.3, [72, 40, 112]],
+  [0.55, [139, 92, 246]],
+  [0.78, [236, 72, 153]],
+  [1.0, [249, 168, 212]],
 ];
 function thermal(t: number): [number, number, number] {
   t = Math.max(0, Math.min(1, t));
@@ -227,7 +231,7 @@ function drawLoss(canvas: HTMLCanvasElement | null, loss: number[], acc: number[
 
   // faint horizontal grid
   ctx.lineWidth = 1;
-  ctx.strokeStyle = 'rgba(255,255,255,0.045)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
   for (let i = 1; i < 5; i++) {
     const y = Math.round((H / 5) * i) + 0.5;
     ctx.beginPath();
@@ -244,9 +248,9 @@ function drawLoss(canvas: HTMLCanvasElement | null, loss: number[], acc: number[
   const yOf = (v: number, max: number) => H - pad - (v / max) * (H - 2 * pad);
   const xOf = (i: number) => (i / (n - 1)) * W;
 
-  // accuracy — light lavender, thin
-  ctx.lineWidth = 1.2 * dpr;
-  ctx.strokeStyle = 'rgba(216,180,254,0.85)';
+  // accuracy — purple
+  ctx.lineWidth = 1.8 * dpr;
+  ctx.strokeStyle = '#c084fc';
   ctx.beginPath();
   for (let i = 0; i < n; i++) {
     const x = xOf(i);
@@ -264,15 +268,14 @@ function drawLoss(canvas: HTMLCanvasElement | null, loss: number[], acc: number[
   ctx.lineTo(0, H);
   ctx.closePath();
   const grad = ctx.createLinearGradient(0, 0, 0, H);
-  grad.addColorStop(0, 'rgba(167,139,250,0.40)');
-  grad.addColorStop(1, 'rgba(167,139,250,0)');
+  grad.addColorStop(0, 'rgba(236,72,153,0.38)');
+  grad.addColorStop(1, 'rgba(236,72,153,0)');
   ctx.fillStyle = grad;
   ctx.fill();
 
-  ctx.lineWidth = 2 * dpr;
-  ctx.strokeStyle = '#a78bfa';
-  ctx.shadowColor = 'rgba(167,139,250,0.8)';
-  ctx.shadowBlur = 8 * dpr;
+  ctx.lineWidth = 2.8 * dpr;
+  ctx.strokeStyle = '#f472b6';
+  ctx.shadowBlur = 0;
   ctx.beginPath();
   for (let i = 0; i < n; i++) {
     const x = xOf(i);
@@ -282,8 +285,8 @@ function drawLoss(canvas: HTMLCanvasElement | null, loss: number[], acc: number[
   }
   ctx.stroke();
   ctx.beginPath();
-  ctx.arc(W - 1, yOf(loss[n - 1], maxLoss), 2.4 * dpr, 0, Math.PI * 2);
-  ctx.fillStyle = '#d8b4fe';
+  ctx.arc(W - 1, yOf(loss[n - 1], maxLoss), 3 * dpr, 0, Math.PI * 2);
+  ctx.fillStyle = '#f472b6';
   ctx.fill();
   ctx.shadowBlur = 0;
 }
@@ -461,8 +464,8 @@ export default function Dashboard() {
         <div>
           <canvas ref={lossRef} width={800} height={150} className="loss-canvas" />
           <div className="spark-cap">
-            <span style={{ color: 'var(--accent)' }}>━</span> loss ·{' '}
-            <span style={{ color: 'var(--accent-pink)' }}>━</span> train accuracy
+            <span style={{ color: 'var(--pink)' }}>━</span> loss ·{' '}
+            <span style={{ color: 'var(--purple)' }}>━</span> train accuracy
           </div>
         </div>
         <div className="probe">
@@ -481,7 +484,12 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <DrawDemo pixels={t.info?.pixels ?? 784} onInfer={t.infer} probs={t.inferProbs} />
+      <DrawDemo
+        pixels={t.info?.pixels ?? 784}
+        onInfer={t.infer}
+        onClear={t.clearInfer}
+        probs={t.inferProbs}
+      />
     </section>
   );
 }
@@ -523,10 +531,12 @@ function HiddenSelect({ value, onChange }: { value: number; onChange: (v: number
 function DrawDemo({
   pixels,
   onInfer,
+  onClear,
   probs,
 }: {
   pixels: number;
   onInfer: (p: Float32Array) => void;
+  onClear: () => void;
   probs: Float32Array | null;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -538,10 +548,12 @@ function DrawDemo({
   const clear = useCallback(() => {
     const c = canvasRef.current;
     const ctx = c?.getContext('2d');
-    if (!c || !ctx) return;
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, c.width, c.height);
-  }, []);
+    if (c && ctx) {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, c.width, c.height);
+    }
+    onClear();
+  }, [onClear]);
 
   useEffect(() => {
     clear();
@@ -668,6 +680,7 @@ function DrawDemo({
         pred = i;
       }
   }
+  const conf = probs && pred >= 0 ? probs[pred] : 0;
 
   return (
     <div className="draw" id="draw" style={{ scrollMarginTop: 90 }}>
@@ -675,23 +688,37 @@ function DrawDemo({
         ▌ draw a digit → live GPU inference
       </div>
       <div className="draw-row">
-        <canvas
-          ref={canvasRef}
-          width={252}
-          height={252}
-          className="draw-canvas"
-          onPointerDown={down}
-          onPointerMove={move}
-          onPointerUp={up}
-          onPointerLeave={up}
-        />
-        <div className="draw-out">
-          <div className="prediction">{pred >= 0 ? pred : '–'}</div>
+        <div className="draw-pad">
+          <canvas
+            ref={canvasRef}
+            width={252}
+            height={252}
+            className="draw-canvas"
+            onPointerDown={down}
+            onPointerMove={move}
+            onPointerUp={up}
+            onPointerLeave={up}
+          />
+          <button className="btn ghost draw-clear" onClick={clear}>
+            clear
+          </button>
+        </div>
+        <div className="draw-result">
+          <div className="draw-result-top">
+            <div className="prediction">{pred >= 0 ? pred : '–'}</div>
+            <div className="draw-conf">
+              <div className="draw-hint-v">
+                {pred >= 0 ? `${Math.round(conf * 100)}%` : '—'}
+                <span>confidence</span>
+              </div>
+              <p>
+                every stroke runs a full forward pass on the GPU worker — the bars below are the
+                live softmax over all ten classes.
+              </p>
+            </div>
+          </div>
           <ProbBars probs={probs} pred={pred} />
         </div>
-        <button className="btn ghost" onClick={clear}>
-          clear
-        </button>
       </div>
     </div>
   );

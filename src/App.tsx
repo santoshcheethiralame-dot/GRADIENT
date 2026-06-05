@@ -94,9 +94,7 @@ export default function App() {
           <h1 className="wordmark">
             gradient<span className="dot" />
           </h1>
-          <p className="masthead-desc">
-            WebGPU neural-net trainer — matmul · forward · backprop · optimize, all on the GPU
-          </p>
+
         </div>
         <div className="statline">
           {phase.kind === 'ready' && (
@@ -395,12 +393,12 @@ function Sparkline({ data, width = 600, height = 76 }: { data: number[]; width?:
       role="img"
       aria-label="training loss curve"
     >
-      <polygon points={area} fill="rgba(167,139,250,0.16)" />
+      <polygon points={area} fill="rgba(236,72,153,0.20)" />
       <polyline
         points={line}
         fill="none"
-        stroke="var(--accent)"
-        strokeWidth={2}
+        stroke="var(--pink)"
+        strokeWidth={2.5}
         vectorEffect="non-scaling-stroke"
         strokeLinejoin="round"
       />
