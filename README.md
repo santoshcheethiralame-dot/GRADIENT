@@ -1,20 +1,42 @@
 # gradient
 
-A neural network that trains **entirely on your GPU, in the browser** — no Python, no server, no WASM. Forward pass, backpropagation, and the optimizer are all WebGPU compute shaders (WGSL) dispatched from TypeScript. The UI visualizes activations and gradients live as the network learns.
+**A neural network that trains entirely on your GPU, in the browser** — no Python, no server, no WASM. The forward pass, backpropagation, and the optimizer are all WebGPU compute shaders (WGSL) dispatched from TypeScript. Open the page and watch it learn, live, on your own graphics card.
 
-> Status: **Complete — all 6 phases.** The full stack runs on WebGPU: device → tensors → matmul → forward → gradient-checked backprop → SGD/Adam → MNIST → a **Web Worker** that trains continuously off the main thread, streaming metrics and activations to a live **oscilloscope-style dashboard** (graticule loss/accuracy traces, blue→amber thermal activation heatmaps) plus a **draw-a-digit** demo that classifies your handwriting live (~**97% test accuracy**). 32/32 kernel checks pass against a CPU oracle, and backprop is verified by numerical gradient checking — all re-run on every page load. UI: a Tektronix/Grafana-inspired scientific-instrument theme.
+🔗 **[Live demo](https://santoshcheethiralame-dot.github.io/GRADIENT/)** · WebGPU / WGSL · React + TypeScript
 
-## Why
+> **Status: complete.** The full stack runs on WebGPU and trains two models — a 2-layer MLP on **MNIST** (~97% test accuracy) and a from-scratch **nano-GPT** char transformer that learns to write. Every GPU kernel is diffed against an f64 CPU oracle and the backward pass is numerical-gradient-checked, all re-run on each page load: **44/44 checks pass**.
 
-Modern training runs on the GPU, but the GPU is usually a black box behind PyTorch. `gradient` rebuilds the stack from the metal up — explicit buffers, bind groups, compute pipelines, and shared-memory tiling — so every FLOP is visible and inspectable in a browser tab.
+---
+
+## What it is
+
+Modern training runs on the GPU, but the GPU is usually a black box behind a framework. `gradient` rebuilds the stack from the metal up — explicit buffers, bind groups, compute pipelines, and 16×16 shared-memory tiling — so every FLOP is visible and inspectable in a browser tab. It trains:
+
+- a **2-layer MLP on MNIST** (~97% test accuracy) in a **Web Worker**, streaming live metrics and activations to the dashboard; and
+- a from-scratch **nano-GPT** — a char-level transformer (causal self-attention + MLP) with hand-derived, **gradient-checked** backprop that trains to reproduce a sentence.
+
+## Proven correct, every load
+
+Numerical code is only as good as its tests. On every page load `gradient` runs a self-test: each GPU kernel is computed and diffed against an independent **f64 CPU oracle** across a spread of shapes (including non-tile-multiples, to exercise boundary masking), and the entire backward pass is gated by **numerical gradient checking** (analytic vs. central-difference). **44/44 checks pass** at rel. err < 1e-3 — measured in your browser, not asserted.
+
+## Features
+
+- **Live training dashboard** — loss/accuracy traces and hidden-activation heatmaps at 60fps
+- **nano-GPT** — train a char transformer live and watch its greedy output sharpen into the target sentence as the loss falls
+- **Embedding projector** — hidden activations → PCA → 2-D scatter; watch the digit classes pull apart as the net learns
+- **Loss landscape** — the loss surface sampled on a grid around the weights along two filter-normalized random directions
+- **GPU profiler** — amortized kernel throughput (naive vs. tiled matmul across sizes, plus a full train step) measured over many back-to-back dispatches
+- **Draw-a-digit** — sketch a number and the trained net classifies it live, with full MNIST preprocessing (bounding-box crop → 20px scale → center-of-mass centering)
+- **CPU fallback** — no WebGPU? The same f64 engine used as the correctness oracle trains a smaller net so the demo runs anywhere (append `?cpu=1` to force it)
+- **About page** — an overview of how it works and how it's verified
 
 ## Stack
 
-- **WebGPU / WGSL** — compute pipelines for all math (matmul, activations, backprop, SGD/Adam)
-- **TypeScript** — buffer/pipeline orchestration, the `GpuTensor` memory model
-- **React + Vite** — UI shell, self-hosted Archivo + JetBrains Mono
-- **Canvas 2D** — the oscilloscope loss/accuracy chart (graticule + phosphor glow) and the thermal activation heatmaps
+- **WebGPU / WGSL** — every math kernel: matmul (naive + tiled), bias-add, ReLU/sigmoid/GELU, softmax, cross-entropy, layer-norm, causal-masked attention softmax, the backward kernels, and SGD/Adam
+- **TypeScript** — buffer/pipeline orchestration and the `GpuTensor` memory model
+- **React 19 + Vite** — UI shell; self-hosted Archivo + JetBrains Mono
 - **Web Worker** — the training loop runs off the main thread, streaming to the UI
+- **Canvas 2D** — loss/accuracy charts, activation heatmaps, the embedding scatter, and the pseudo-3D loss surface
 
 ## Run
 
@@ -23,22 +45,40 @@ npm install
 npm run dev      # http://localhost:5173
 ```
 
-Requires a WebGPU-capable browser (Chrome / Edge 113+, recent Safari, or Firefox with the WebGPU flag). On load the app requests a GPU adapter and runs a kernel self-test: each matmul shape is computed on the GPU and compared against a CPU reference, with max absolute/relative error reported per kernel.
+Requires a WebGPU-capable browser (Chrome / Edge 113+, recent Safari, or Firefox with the WebGPU flag). Without WebGPU the CPU fallback runs automatically.
 
-## Roadmap
+```bash
+npm run build    # production build → dist/
+```
 
-1. **Foundation** — device, `GpuTensor`, naive + tiled matmul, self-test ✅
-2. **Forward** — bias add, ReLU, sigmoid, softmax + cross-entropy ✅
-3. **Backward** — gradient shaders + numerical gradient checking ✅
-4. **Optimizers** — SGD, then Adam; training loop on synthetic data ✅
-5. **Data** — MNIST IDX parsing → GPU buffers, batched gather ✅
-6. **Visualize** — Worker-driven training, live instrument dashboard at 60fps, draw-a-digit ✅
+Deploy is automated: pushing to `main` runs `.github/workflows/deploy.yml`, which builds with the correct Pages base path and publishes to GitHub Pages.
+
+## How it was built
+
+Shipped as small, individually-verified steps — each landed only after its self-test passed.
+
+**WebGPU MLP engine — 6 phases**
+
+1. **Foundation** — device, `GpuTensor`, naive + tiled matmul, self-test
+2. **Forward** — bias-add, ReLU, sigmoid, softmax + cross-entropy
+3. **Backward** — gradient shaders + numerical gradient checking
+4. **Optimizers** — SGD, then Adam; training loop on synthetic data
+5. **Data** — MNIST IDX parsing → packed GPU buffers, batched gather
+6. **Visualize** — Worker-driven training, live dashboard, draw-a-digit
+
+**nano-GPT — 4 increments**
+
+1. **Architecture** — tokenizer, embeddings, a pre-LN block (attention + MLP), generation
+2. **Backprop + training** — hand-derived gradients through softmax-attention and layer-norm, gradient-checked, then trained to overfit and reproduce a sentence
+3. **GPU forward port** — layer-norm / causal-softmax / GELU / residual kernels in WGSL (projections reuse the matmul kernels), verified GPU-vs-CPU to ~1e-7
+4. **Live panel** — train it in the browser and watch it write
 
 ## Architecture notes
 
-- One `GPUDevice`, one `GPUQueue`. Submissions are ordered; forward/backward/update share the queue.
+- One `GPUDevice`, one `GPUQueue`. Submissions are ordered, so forward / backward / update share the queue without explicit synchronization.
 - Tensors are allocated once and reused across steps — the only per-step CPU touch is reading back the scalar loss for logging.
 - Shaders live as `.wgsl` files imported with Vite's `?raw` suffix, so the real kernel source is first-class and inspectable.
+- `reference.ts` (the f64 CPU implementation) pulls double duty: the correctness oracle for the self-test **and** the no-WebGPU fallback engine.
 
 ## License
 

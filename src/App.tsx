@@ -9,6 +9,7 @@ import {
 import Dashboard from './ui/Dashboard';
 import CpuTrainer from './ui/CpuTrainer';
 import { NanoGptLab } from './ui/NanoGptLab';
+import { About } from './ui/About';
 import { runProfile, type ProfileRow } from './gpu/profile';
 
 interface DeviceLimits {
@@ -52,6 +53,7 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>({ kind: 'init' });
   const [report, setReport] = useState<SelfTestReport | null>(null);
   const [running, setRunning] = useState(false);
+  const [view, setView] = useState<'lab' | 'about'>('lab');
   const booted = useRef(false);
 
   const executeSelfTest = useCallback(async () => {
@@ -109,6 +111,14 @@ export default function App() {
 
         </div>
         <div className="statline">
+          <nav className="nav">
+            <button className={view === 'lab' ? 'active' : ''} onClick={() => setView('lab')}>
+              lab
+            </button>
+            <button className={view === 'about' ? 'active' : ''} onClick={() => setView('about')}>
+              about
+            </button>
+          </nav>
           {phase.kind === 'ready' && (
             <span>
               GPU&nbsp;<b>{phase.label}</b>
@@ -124,9 +134,13 @@ export default function App() {
         </div>
       </header>
 
-      {phase.kind === 'ready' && <Overview phase={phase} report={report} />}
+      {view === 'about' ? (
+        <About onEnter={() => setView('lab')} />
+      ) : (
+        <>
+          {phase.kind === 'ready' && <Overview phase={phase} report={report} />}
 
-      <div className="grid">
+          <div className="grid">
         <DeviceCard phase={phase} />
         {phase.kind === 'ready' && report?.training && <TrainingCard t={report.training} />}
 
@@ -162,12 +176,15 @@ export default function App() {
             </p>
           </section>
         )}
-      </div>
+          </div>
 
-      <p className="foot">
-        All 6 phases complete — WebGPU device → tensors → matmul → forward → backprop (gradient-checked)
-        → SGD/Adam → MNIST → a Worker-driven live dashboard with activation heatmaps and draw-a-digit inference.
-      </p>
+          <p className="foot">
+            The full WebGPU stack — device → tensors → tiled matmul → forward → gradient-checked
+            backprop → SGD/Adam → MNIST — plus nano-GPT, a char transformer that trains and writes.
+            44/44 self-test on every load.
+          </p>
+        </>
+      )}
     </div>
   );
 }
