@@ -919,3 +919,35 @@ canvas.px {
 .cpu-sample.wrong span {
   color: var(--danger);
 }
+
+/* ---- loss landscape ---- */
+.land-row {
+  display: flex;
+  gap: 18px;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+.land-canvas {
+  flex: 1;
+  min-width: 280px;
+  height: 300px;
+  border-radius: var(--radius-sm);
+  border: var(--bw) solid var(--black);
+  background: var(--screen);
+  box-shadow: var(--shadow);
+}
+.land-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  justify-content: center;
+  max-width: 240px;
+}
+.land-side p {
+  margin: 0;
+  font-family: var(--mono);
+  font-weight: 500;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--muted);
+}

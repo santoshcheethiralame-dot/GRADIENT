@@ -209,6 +209,71 @@ async function handleInfer(pixels: Float32Array): Promise<void> {
   }
 }
 
+// Sample the loss on a G×G grid around the current weights along two random,
+// filter-normalized directions (Li et al.). Perturbs the weights in place,
+// reads the loss on a fixed batch, then restores. Pauses training (infering).
+async function computeLandscape(): Promise<void> {
+  if (!mlp || !data) return;
+  infering = true;
+  try {
+    const G = 21;
+    const range = 1.0;
+    const params = mlp.params();
+    const W0 = await Promise.all(params.map((p) => p.toArray()));
+    const rng2 = mulberry32(step + 17);
+    const makeDir = () =>
+      W0.map((w) => {
+        const d = new Float32Array(w.length);
+        let wn = 0;
+        let dn = 0;
+        for (let i = 0; i < w.length; i++) {
+          const g = gaussian(rng2);
+          d[i] = g;
+          dn += g * g;
+          wn += w[i] * w[i];
+        }
+        const scale = Math.sqrt(wn) / (Math.sqrt(dn) || 1); // match the weight norm
+        for (let i = 0; i < w.length; i++) d[i] *= scale;
+        return d;
+      });
+    const d1 = makeDir();
+    const d2 = makeDir();
+
+    // fixed probe batch (first B train images)
+    for (let i = 0; i < B; i++) {
+      idxArr[i] = i;
+      labArr[i] = data.train.labels[i];
+    }
+    device.queue.writeBuffer(idxBuf, 0, idxArr);
+    device.queue.writeBuffer(labBuf, 0, labArr);
+    gather(device, data.train.packed, idxBuf, B, data.pixels, batchImages);
+
+    const grid = new Float32Array(G * G);
+    const tmp = params.map((_, k) => new Float32Array(W0[k].length));
+    for (let gi = 0; gi < G; gi++) {
+      const a = (gi / (G - 1)) * 2 * range - range;
+      for (let gj = 0; gj < G; gj++) {
+        const b = (gj / (G - 1)) * 2 * range - range;
+        for (let k = 0; k < params.length; k++) {
+          const w0 = W0[k];
+          const e1 = d1[k];
+          const e2 = d2[k];
+          const t = tmp[k];
+          for (let i = 0; i < t.length; i++) t[i] = w0[i] + a * e1[i] + b * e2[i];
+          device.queue.writeBuffer(params[k].buffer, 0, t);
+        }
+        grid[gi * G + gj] = await mlp.forwardLoss(batchImages, labBuf);
+      }
+    }
+    for (let k = 0; k < params.length; k++)
+      device.queue.writeBuffer(params[k].buffer, 0, W0[k] as Float32Array<ArrayBuffer>);
+
+    post({ type: 'landscape', grid, size: G, step }, [grid.buffer]);
+  } finally {
+    infering = false;
+  }
+}
+
 sw.onmessage = (e: MessageEvent<InMsg>) => {
   const msg = e.data;
   switch (msg.type) {
@@ -233,6 +298,9 @@ sw.onmessage = (e: MessageEvent<InMsg>) => {
       break;
     case 'infer':
       void handleInfer(msg.pixels);
+      break;
+    case 'landscape':
+      void computeLandscape();
       break;
   }
 };

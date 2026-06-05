@@ -6,7 +6,7 @@
 // through the worker for live classification.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ActivationsMsg, EmbeddingMsg, InMsg, OutMsg } from '../worker/protocol';
+import type { ActivationsMsg, EmbeddingMsg, InMsg, LandscapeMsg, OutMsg } from '../worker/protocol';
 
 interface Info {
   adapter: string;
@@ -30,6 +30,7 @@ interface TrainerRefs {
   accHist: { current: number[] };
   activations: { current: ActivationsMsg | null };
   embedding: { current: EmbeddingMsg | null };
+  landscape: { current: LandscapeMsg | null };
   metrics: { current: Metrics };
   testAcc: { current: number | null };
 }
@@ -44,6 +45,7 @@ function useTrainer() {
   const [error, setError] = useState('');
   const [running, setRunning] = useState(false);
   const [inferProbs, setInferProbs] = useState<Float32Array | null>(null);
+  const [landscapeBusy, setLandscapeBusy] = useState(false);
 
   const refs = useMemo<TrainerRefs>(
     () => ({
@@ -51,6 +53,7 @@ function useTrainer() {
       accHist: { current: [] },
       activations: { current: null },
       embedding: { current: null },
+      landscape: { current: null },
       metrics: { current: { step: 0, loss: NaN, trainAcc: 0, stepsPerSec: 0 } },
       testAcc: { current: null },
     }),
@@ -111,6 +114,10 @@ function useTrainer() {
         case 'embedding':
           refs.embedding.current = msg;
           break;
+        case 'landscape':
+          refs.landscape.current = msg;
+          setLandscapeBusy(false);
+          break;
         case 'probs':
           setInferProbs(msg.probs);
           break;
@@ -143,14 +150,18 @@ function useTrainer() {
     [send],
   );
   const clearInfer = useCallback(() => setInferProbs(null), []);
+  const computeLandscape = useCallback(() => {
+    setLandscapeBusy(true);
+    send({ type: 'landscape' });
+  }, [send]);
 
   useEffect(() => {
     return () => workerRef.current?.terminate();
   }, []);
 
   return {
-    phase, status, info, error, running, inferProbs, refs,
-    begin, pause, resume, reset, infer, clearInfer,
+    phase, status, info, error, running, inferProbs, landscapeBusy, refs,
+    begin, pause, resume, reset, infer, clearInfer, computeLandscape,
   };
 }
 
@@ -331,6 +342,77 @@ function drawScatter(canvas: HTMLCanvasElement | null, emb: EmbeddingMsg | null)
   ctx.globalAlpha = 1;
 }
 
+function drawLandscape(canvas: HTMLCanvasElement | null, land: LandscapeMsg | null): void {
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const cw = Math.max(1, Math.round(canvas.clientWidth * dpr));
+  const ch = Math.max(1, Math.round(canvas.clientHeight * dpr));
+  if (canvas.width !== cw) canvas.width = cw;
+  if (canvas.height !== ch) canvas.height = ch;
+  const W = canvas.width;
+  const H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  if (!land) return;
+
+  const { grid, size: G } = land;
+  let min = Infinity;
+  let max = -Infinity;
+  for (let i = 0; i < grid.length; i++) {
+    if (grid[i] < min) min = grid[i];
+    if (grid[i] > max) max = grid[i];
+  }
+  const span = max - min || 1;
+  const norm = (h: number) => (h - min) / span;
+
+  const cx = W / 2;
+  const cyTop = H * 0.4;
+  const sx = (W * 0.42) / G;
+  const sy = (H * 0.27) / G;
+  const amp = H * 0.33;
+  const px = (i: number, j: number) => cx + (i - j) * sx;
+  const py = (i: number, j: number, h: number) => cyTop + (i + j) * sy - norm(h) * amp;
+
+  const lo = [124, 92, 246]; // low loss → purple
+  const hi = [236, 72, 153]; // high loss → pink
+  const color = (t: number) =>
+    `rgb(${Math.round(lo[0] + (hi[0] - lo[0]) * t)},${Math.round(lo[1] + (hi[1] - lo[1]) * t)},${Math.round(lo[2] + (hi[2] - lo[2]) * t)})`;
+
+  const quads: Array<[number, number]> = [];
+  for (let i = 0; i < G - 1; i++) for (let j = 0; j < G - 1; j++) quads.push([i, j]);
+  quads.sort((a, b) => a[0] + a[1] - (b[0] + b[1])); // far → near
+
+  ctx.lineWidth = 1;
+  for (const [i, j] of quads) {
+    const h00 = grid[i * G + j];
+    const h01 = grid[i * G + j + 1];
+    const h10 = grid[(i + 1) * G + j];
+    const h11 = grid[(i + 1) * G + j + 1];
+    ctx.beginPath();
+    ctx.moveTo(px(i, j), py(i, j, h00));
+    ctx.lineTo(px(i + 1, j), py(i + 1, j, h10));
+    ctx.lineTo(px(i + 1, j + 1), py(i + 1, j + 1, h11));
+    ctx.lineTo(px(i, j + 1), py(i, j + 1, h01));
+    ctx.closePath();
+    ctx.fillStyle = color(norm((h00 + h01 + h10 + h11) / 4));
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.28)';
+    ctx.stroke();
+  }
+
+  // current weights (grid center, α=β=0)
+  const m = (G - 1) / 2;
+  const hc = grid[Math.round(m) * G + Math.round(m)];
+  ctx.beginPath();
+  ctx.arc(px(m, m), py(m, m, hc), 4 * dpr, 0, Math.PI * 2);
+  ctx.fillStyle = '#fff';
+  ctx.fill();
+  ctx.strokeStyle = '#15101f';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
 // ---- output bars ----
 
 const DIGITS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
@@ -371,6 +453,7 @@ export default function Dashboard() {
   const inputRef = useRef<HTMLCanvasElement>(null);
   const hiddenRef = useRef<HTMLCanvasElement>(null);
   const embedRef = useRef<HTMLCanvasElement>(null);
+  const landscapeRef = useRef<HTMLCanvasElement>(null);
   const [readout, setReadout] = useState<Readout>({
     step: 0,
     loss: NaN,
@@ -396,6 +479,7 @@ export default function Dashboard() {
       }
       drawLoss(lossRef.current, refs.lossHist.current, refs.accHist.current);
       drawScatter(embedRef.current, refs.embedding.current);
+      drawLandscape(landscapeRef.current, refs.landscape.current);
       if (++frame % 4 === 0) {
         const m = refs.metrics.current;
         setReadout({
@@ -538,6 +622,22 @@ export default function Dashboard() {
               {d}
             </span>
           ))}
+        </div>
+      </div>
+
+      <div className="group-label" style={{ marginTop: 24 }}>
+        ▌ loss landscape · loss around the weights, two random directions
+      </div>
+      <div className="land-row">
+        <canvas ref={landscapeRef} className="land-canvas" width={560} height={300} />
+        <div className="land-side">
+          <button className="btn ghost" onClick={t.computeLandscape} disabled={t.landscapeBusy}>
+            {t.landscapeBusy ? 'sampling…' : 'compute surface'}
+          </button>
+          <p>
+            samples the loss on a 21×21 grid around the current weights along two filter-normalized
+            directions. purple = low, pink = high. white dot = the current weights.
+          </p>
         </div>
       </div>
 

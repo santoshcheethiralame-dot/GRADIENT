@@ -7,7 +7,8 @@ export type InMsg =
   | { type: 'start' }
   | { type: 'pause' }
   | { type: 'reset'; hidden: number; lr: number }
-  | { type: 'infer'; pixels: Float32Array }; // [pixels] normalized, drawn digit
+  | { type: 'infer'; pixels: Float32Array } // [pixels] normalized, drawn digit
+  | { type: 'landscape' }; // compute a loss surface around the current weights
 
 export interface ReadyMsg {
   type: 'ready';
@@ -52,6 +53,12 @@ export interface ProbsMsg {
   type: 'probs';
   probs: Float32Array; // [10] response to an infer request
 }
+export interface LandscapeMsg {
+  type: 'landscape';
+  grid: Float32Array; // [size*size] loss sampled on a 2-D grid around the weights
+  size: number;
+  step: number;
+}
 export interface ErrorMsg {
   type: 'error';
   message: string;
@@ -65,4 +72,5 @@ export type OutMsg =
   | EmbeddingMsg
   | ActivationsMsg
   | ProbsMsg
+  | LandscapeMsg
   | ErrorMsg;
