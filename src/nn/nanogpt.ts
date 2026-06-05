@@ -9,15 +9,17 @@
 //        head · autoregressive generation. Verified in the self-test by the
 //        defining property of a GPT — strict causality — plus softmax/LN/vocab
 //        invariants. No backward yet, so nothing here needs gradient-checking.
-//   ⬜ Increment 2: the backward pass (the hard part — gradients through softmax
+//   ✅ Increment 2: the backward pass (the hard part — gradients through softmax
 //        attention and layer-norm), gated by numerical gradient checking exactly
-//        like the MLP, then a training loop that overfits this corpus so it
-//        learns to reproduce it.
+//        like the MLP, then a training loop that overfits a sentence and writes
+//        it back. backward()/params()/zeroGrad() below; verified in the self-test.
+//   ✅ Increment 4: a live dashboard panel (CH5, NanoGptLab) — train it in the
+//        browser and watch the greedy output sharpen into the target sentence as
+//        the loss falls.
 //   ⬜ Increment 3: port the hot paths (QKᵀ, softmax, A·V, the projections) to
 //        WGSL compute shaders — most matmuls reuse the kernels we already have;
-//        the new ones are causal-masked softmax and layer-norm.
-//   ⬜ Increment 4: a dashboard panel — type a prompt, watch it generate
-//        character by character on the GPU, with the live attention matrix.
+//        the new ones are causal-masked softmax and layer-norm. (The remaining
+//        one — an optimization; the CPU engine above is already correct + live.)
 //
 // Everything is f32/f64 CPU math here; deterministic given a seeded RNG so the
 // self-test is reproducible.
