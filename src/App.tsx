@@ -8,6 +8,7 @@ import {
 } from './gpu/selftest';
 import Dashboard from './ui/Dashboard';
 import CpuTrainer from './ui/CpuTrainer';
+import { NanoGptLab } from './ui/NanoGptLab';
 import { runProfile, type ProfileRow } from './gpu/profile';
 
 interface DeviceLimits {
@@ -140,6 +141,10 @@ export default function App() {
         )}
 
         {phase.kind === 'ready' && <ProfilerCard />}
+
+        {(phase.kind === 'ready' || phase.kind === 'cpu' || phase.kind === 'unsupported') && (
+          <NanoGptLab />
+        )}
 
         {(phase.kind === 'cpu' || phase.kind === 'unsupported') && (
           <CpuTrainer forced={phase.kind === 'cpu'} />
