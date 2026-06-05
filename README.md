@@ -38,20 +38,41 @@ Numerical code is only as good as its tests. On every page load `gradient` runs 
 - **Web Worker** — the training loop runs off the main thread, streaming to the UI
 - **Canvas 2D** — loss/accuracy charts, activation heatmaps, the embedding scatter, and the pseudo-3D loss surface
 
-## Run
+## Quick start
+
+**Prerequisites:** [Node.js](https://nodejs.org) 18 or newer, and a WebGPU-capable browser (Chrome / Edge 113+, Safari 18+, or Firefox 141+). No compatible GPU? The app falls back to a CPU engine automatically, so it still runs anywhere.
 
 ```bash
+git clone https://github.com/santoshcheethiralame-dot/GRADIENT.git
+cd GRADIENT
 npm install
-npm run dev      # http://localhost:5173
+npm run dev          # → http://localhost:5173
 ```
 
-Requires a WebGPU-capable browser (Chrome / Edge 113+, recent Safari, or Firefox with the WebGPU flag). Without WebGPU the CPU fallback runs automatically.
+Open the URL — the app boots, runs its kernel self-test, and starts training. The other scripts:
 
 ```bash
-npm run build    # production build → dist/
+npm run build        # type-check + production bundle → dist/
+npm run preview      # serve the production build locally
 ```
 
-Deploy is automated: pushing to `main` runs `.github/workflows/deploy.yml`, which builds with the correct Pages base path and publishes to GitHub Pages.
+(If you use [nvm](https://github.com/nvm-sh/nvm), `nvm use` picks up the pinned Node version from `.nvmrc`.)
+
+## Deploy
+
+**GitHub Pages — included.** The workflow at `.github/workflows/deploy.yml` builds and publishes on every push to `main`. To enable it on your fork: **Settings → Pages → Build and deployment → Source: _GitHub Actions_**, then push (or run the workflow manually). It publishes to `https://<your-username>.github.io/<repo>/`; the workflow sets Vite's base path from the repo name, so forks of any name work without edits.
+
+**Vercel or Netlify — zero config.** Both auto-detect Vite, so just import the repository and deploy — no build settings to fill in (these serve from the domain root).
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fsantoshcheethiralame-dot%2FGRADIENT)
+[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/santoshcheethiralame-dot/GRADIENT)
+
+## Troubleshooting
+
+- **"WebGPU not available."** Use a supported browser, or just run it as-is — the app drops to the CPU engine. Force CPU mode any time with `?cpu=1` in the URL.
+- **Blank page or 404 assets on GitHub Pages.** Set the Pages source to **GitHub Actions** (not a branch) — only that path runs the build that sets the correct base path.
+- **Port 5173 already in use.** `npm run dev -- --port 5174`.
+- **Node version errors.** This needs Node 18+ (`.nvmrc` pins 20).
 
 ## How it was built
 
@@ -82,4 +103,4 @@ Shipped as small, individually-verified steps — each landed only after its sel
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).

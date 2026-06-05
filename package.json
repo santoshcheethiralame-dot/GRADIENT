@@ -3,12 +3,17 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "A neural network that trains on your GPU, in your browser. WebGPU compute shaders for forward, backprop, and optimization, with live D3 visualization.",
+  "license": "MIT",
+  "author": "Santosh Cheethirala",
+  "description": "A neural network that trains entirely on your GPU in the browser. The forward pass, backpropagation, and optimizer are WebGPU/WGSL compute shaders, with a live training dashboard and a from-scratch nano-GPT.",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
     "@fontsource/archivo": "^5.2.8",
