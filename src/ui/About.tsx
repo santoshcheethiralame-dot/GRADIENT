@@ -1,10 +1,47 @@
 // The About page — a portfolio-facing overview of what gradient is, how it
-// works, and how it's verified. Pure presentation; no GPU work here.
+// works, and how it's verified. Full-bleed like the lab view; two-column
+// sections use the width instead of leaving it empty. Pure presentation.
 
 import { Fragment } from 'react';
 
 const REPO = 'https://github.com/santoshcheethiralame-dot/GRADIENT';
 const PIPELINE = ['GPUDevice', 'GpuTensor', 'tiled matmul', 'forward', 'backprop', 'Adam', 'MNIST'];
+
+const STATS = [
+  { v: '44/44', l: 'self-test checks pass' },
+  { v: '~97%', l: 'MNIST test accuracy' },
+  { v: '2', l: 'models · MLP + transformer' },
+  { v: '0', l: 'servers · 100% in-browser' },
+];
+
+const MLP_PHASES = [
+  'device · GpuTensor · tiled matmul',
+  'forward ops — relu, softmax, cross-entropy',
+  'gradient-checked backward pass',
+  'optimizers — SGD, then Adam',
+  'MNIST → packed GPU buffers',
+  'Worker-driven live dashboard',
+];
+const GPT_STEPS = [
+  'architecture + autoregressive generation',
+  'gradient-checked backprop + training',
+  'WGSL forward port (verified to ~1e-7)',
+  'live “watch it write” panel',
+];
+
+const WGSL = `// causal_softmax.wgsl — the attention core
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id)
+        gid: vec3<u32>) {
+  let i   = gid.x;     // query row
+  let lim = i + 1u;    // keys 0..i only
+  var m = -1e30;
+  for (var j = 0u; j < lim; j++) {
+    m = max(m, inp[i*T + j] * scale);
+  }
+  // softmax over the causal window;
+  // future keys (j > i) are masked to 0
+}`;
 
 interface Feature {
   tag: string;
@@ -51,24 +88,44 @@ export function About({ onEnter }: { onEnter: () => void }) {
   return (
     <div className="about">
       <section className="card about-hero">
-        <span className="about-kicker">▌ about · gradient</span>
-        <h1 className="about-title">
-          A neural network that trains on your <span className="hl">GPU</span>, in a browser tab.
-        </h1>
-        <p className="about-lede">
-          No Python, no server, no WASM. Every FLOP — the forward pass, backpropagation, and the
-          optimizer — is a WebGPU compute shader written in WGSL and dispatched from TypeScript.
-          Open the page and watch the network learn, live, on your own graphics card.
-        </p>
-        <div className="about-cta">
-          <button className="btn primary" onClick={onEnter}>
-            open the lab →
-          </button>
-          <a className="btn ghost" href={REPO} target="_blank" rel="noreferrer">
-            source on github
-          </a>
+        <div className="about-hero-main">
+          <span className="about-kicker">▌ about · gradient</span>
+          <h1 className="about-title">
+            a neural network that trains on your <span className="hl">gpu</span>, in a browser tab.
+          </h1>
+          <p className="about-lede">
+            No Python, no server, no WASM. Every FLOP — the forward pass, backpropagation, and the
+            optimizer — is a WebGPU compute shader written in WGSL and dispatched from TypeScript.
+            Open the page and watch the network learn, live, on your own graphics card.
+          </p>
+          <div className="about-cta">
+            <button className="btn" onClick={onEnter}>
+              open the lab →
+            </button>
+            <a className="btn ghost" href={REPO} target="_blank" rel="noreferrer">
+              source on github
+            </a>
+          </div>
         </div>
+        <aside className="codepanel">
+          <div className="codepanel-bar">
+            <i />
+            <i />
+            <i />
+            <span>causal_softmax.wgsl</span>
+          </div>
+          <pre className="codepanel-code">{WGSL}</pre>
+        </aside>
       </section>
+
+      <div className="about-stats">
+        {STATS.map((s) => (
+          <div className="about-stat" key={s.l}>
+            <b>{s.v}</b>
+            <span>{s.l}</span>
+          </div>
+        ))}
+      </div>
 
       <section className="card about-sec">
         <h2>
@@ -94,15 +151,18 @@ export function About({ onEnter }: { onEnter: () => void }) {
         <h2>
           <span className="ch">02</span>proven correct, every load
         </h2>
-        <p className="about-body">
-          Numerical code is only as good as its tests. On every page load, gradient runs a self-test:
-          each GPU kernel is computed and diffed against an independent <b>f64 CPU oracle</b> across a
-          spread of shapes, and the entire backward pass is gated by <b>numerical gradient checking</b>{' '}
-          (analytic vs. central-difference). Nothing is asserted — it's measured, in your browser.
-        </p>
-        <div className="proof-stat">
-          <b>44 / 44</b>
-          <span>kernel + gradient checks pass · rel. err &lt; 1e-3</span>
+        <div className="proof-row">
+          <p className="about-body">
+            Numerical code is only as good as its tests. On every page load, gradient runs a
+            self-test: each GPU kernel is computed and diffed against an independent <b>f64 CPU
+            oracle</b> across a spread of shapes, and the entire backward pass is gated by{' '}
+            <b>numerical gradient checking</b> (analytic vs. central-difference). Nothing is asserted
+            — it's measured, in your browser.
+          </p>
+          <div className="proof-big">
+            <b>44 / 44</b>
+            <span>kernel + gradient checks · rel. err &lt; 1e-3</span>
+          </div>
         </div>
       </section>
 
@@ -126,11 +186,27 @@ export function About({ onEnter }: { onEnter: () => void }) {
           <span className="ch">04</span>built in the open
         </h2>
         <p className="about-body">
-          Shipped as small, individually-verified steps — six phases for the WebGPU MLP engine
-          (device → tensors → matmul → forward → gradient-checked backprop → optimizers → MNIST →
-          dashboard), then four increments for the transformer (architecture → backprop → live panel
-          → WGSL forward port). Each landed only after its self-test passed.
+          Shipped as small, individually-verified steps — each landed only after its self-test
+          passed. The WebGPU MLP engine came first, then the transformer was layered on top.
         </p>
+        <div className="build-cols">
+          <div className="build-col">
+            <h4>WebGPU MLP · 6 phases</h4>
+            <ol>
+              {MLP_PHASES.map((p) => (
+                <li key={p}>{p}</li>
+              ))}
+            </ol>
+          </div>
+          <div className="build-col">
+            <h4>nano-GPT · 4 increments</h4>
+            <ol>
+              {GPT_STEPS.map((p) => (
+                <li key={p}>{p}</li>
+              ))}
+            </ol>
+          </div>
+        </div>
         <div className="about-stack">
           {STACK.map((s) => (
             <span key={s}>{s}</span>
