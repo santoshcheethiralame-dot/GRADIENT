@@ -32,6 +32,7 @@ const GROUP_LABELS: Record<CheckGroup, string> = {
   optim: 'optimizers',
   data: 'data pipeline',
   gradcheck: 'gradient check · numerical vs. analytic',
+  nanogpt: 'nano-GPT · char transformer (forward)',
 };
 const GROUP_ORDER: CheckGroup[] = [
   'matmul',
@@ -41,6 +42,7 @@ const GROUP_ORDER: CheckGroup[] = [
   'optim',
   'data',
   'gradcheck',
+  'nanogpt',
 ];
 
 export default function App() {
@@ -283,7 +285,7 @@ function SelfTestView({
         <span className="big">
           {report.allPassed ? `${passed} / ${total} NOMINAL` : `${total - passed} FAULT`}
         </span>
-        <span className="sub">all kernels verified against an f64 CPU oracle · rel. err &lt; 1e-3</span>
+        <span className="sub">GPU kernels diffed against an f64 CPU oracle (rel. err &lt; 1e-3) · architecture invariants checked</span>
       </div>
 
       <table className="diag">

@@ -28,6 +28,14 @@ import { Mlp } from '../nn/mlp';
 import { numericalGradCheck } from '../nn/gradcheck';
 import { SGD, Adam } from '../nn/optimizer';
 import { makeBlobs, gaussian } from '../data/synthetic';
+import {
+  CharTokenizer,
+  NanoGpt,
+  layerNormRows,
+  softmaxRow,
+  defaultConfig,
+  NANO_CORPUS,
+} from '../nn/nanogpt';
 
 const TOL = 1e-3; // generous headroom for f32 vs f64 accumulation
 const GRAD_TOL = 2e-2; // central-difference + f32 readback noise
@@ -39,7 +47,8 @@ export type CheckGroup =
   | 'backward'
   | 'gradcheck'
   | 'optim'
-  | 'data';
+  | 'data'
+  | 'nanogpt';
 
 export interface CheckResult {
   group: CheckGroup;
@@ -595,6 +604,128 @@ async function gatherCheck(images = 20, pixels = 16, batch = 5, seed = 83): Prom
   return verdict('data', 'gather batch', `${batch}×${pixels} from ${images} imgs · uint8→f32/255`, m, ms);
 }
 
+// ---- nano-GPT (increment 1: char transformer forward + generation, CPU) ----
+// No GPU oracle to diff against yet — instead we assert the architecture's
+// defining invariants: strict causality (the GPT property), a normalized output
+// distribution, correct layer-norm, and in-vocabulary generation.
+
+function nanoGptCheckSuite(): CheckResult[] {
+  const out: CheckResult[] = [];
+  const tok = new CharTokenizer(NANO_CORPUS);
+  const cfg = defaultConfig(tok.vocab);
+  const model = new NanoGpt(cfg, 7);
+  const V = cfg.vocab;
+  const T = cfg.blockSize;
+
+  const base = tok.encode(NANO_CORPUS);
+  const ids: number[] = [];
+  for (let i = 0; i < T; i++) ids.push(base[i % base.length]);
+
+  // 1) strict causality: editing token p must not perturb logits at positions < p.
+  {
+    const t0 = performance.now();
+    const l1 = model.forward(ids);
+    const p = Math.floor(T / 2);
+    const ids2 = ids.slice();
+    ids2[p] = (ids2[p] + 1) % V;
+    const l2 = model.forward(ids2);
+    let past = 0;
+    for (let i = 0; i < p; i++)
+      for (let v = 0; v < V; v++) past = Math.max(past, Math.abs(l1[i * V + v] - l2[i * V + v]));
+    let atP = 0;
+    for (let v = 0; v < V; v++) atP = Math.max(atP, Math.abs(l1[p * V + v] - l2[p * V + v]));
+    out.push({
+      group: 'nanogpt',
+      name: 'causal mask',
+      detail: `edit tok@${p}: Δ(past)=${past.toExponential(1)} · Δ@p=${atP.toFixed(3)}`,
+      maxAbsErr: past,
+      maxRelErr: past,
+      ms: performance.now() - t0,
+      pass: past < 1e-5 && atP > 1e-6,
+    });
+  }
+
+  // 2) next-char distribution is a valid, normalized softmax.
+  {
+    const t0 = performance.now();
+    const logits = model.forward(ids);
+    const probs = new Float32Array(V);
+    for (let v = 0; v < V; v++) probs[v] = logits[(T - 1) * V + v];
+    softmaxRow(probs, 0, V);
+    let sum = 0;
+    let min = Infinity;
+    for (let v = 0; v < V; v++) {
+      sum += probs[v];
+      if (probs[v] < min) min = probs[v];
+    }
+    const err = Math.abs(sum - 1);
+    out.push({
+      group: 'nanogpt',
+      name: 'softmax',
+      detail: `${V}-way next-char · Σp=${sum.toFixed(5)} · min ${min.toExponential(1)}`,
+      maxAbsErr: err,
+      maxRelErr: err,
+      ms: performance.now() - t0,
+      pass: err < 1e-5 && min >= 0,
+    });
+  }
+
+  // 3) layer norm normalizes each row to ~zero mean / unit variance.
+  {
+    const t0 = performance.now();
+    const rows = 8;
+    const d = cfg.dEmbed;
+    const rng = mulberry32(21);
+    const x = new Float32Array(rows * d);
+    for (let i = 0; i < x.length; i++) x[i] = (rng() * 2 - 1) * 5;
+    const y = layerNormRows(x, rows, d, new Float32Array(d).fill(1), new Float32Array(d));
+    let err = 0;
+    for (let r = 0; r < rows; r++) {
+      let mean = 0;
+      for (let i = 0; i < d; i++) mean += y[r * d + i];
+      mean /= d;
+      let varc = 0;
+      for (let i = 0; i < d; i++) {
+        const v = y[r * d + i] - mean;
+        varc += v * v;
+      }
+      varc /= d;
+      err = Math.max(err, Math.abs(mean), Math.abs(varc - 1));
+    }
+    out.push({
+      group: 'nanogpt',
+      name: 'layer norm',
+      detail: `${rows}×${d} rows → μ≈0, σ²≈1`,
+      maxAbsErr: err,
+      maxRelErr: err,
+      ms: performance.now() - t0,
+      pass: err < 1e-3,
+    });
+  }
+
+  // 4) generation stays in-vocabulary and yields exactly the requested length.
+  {
+    const t0 = performance.now();
+    const prompt = tok.encode('gradient');
+    const n = 48;
+    const seq = model.generate(prompt, n, 0.8, mulberry32(123));
+    let inVocab = true;
+    for (const id of seq) if (id < 0 || id >= V) inVocab = false;
+    const ok = inVocab && seq.length === prompt.length + n;
+    out.push({
+      group: 'nanogpt',
+      name: 'generate',
+      detail: `prompt+${n} chars · all ∈ vocab[${V}] · len ${seq.length}`,
+      maxAbsErr: ok ? 0 : 1,
+      maxRelErr: ok ? 0 : 1,
+      ms: performance.now() - t0,
+      pass: ok,
+    });
+  }
+
+  return out;
+}
+
 // ---- runner ----
 
 const MATMUL_SHAPES: Array<[number, number, number]> = [
@@ -636,6 +767,8 @@ export async function runSelfTest(): Promise<SelfTestReport> {
   results.push(await adamCheck());
 
   results.push(await gatherCheck());
+
+  results.push(...nanoGptCheckSuite());
 
   const training = await trainingDemo();
 
