@@ -32,7 +32,7 @@ const GROUP_LABELS: Record<CheckGroup, string> = {
   optim: 'optimizers',
   data: 'data pipeline',
   gradcheck: 'gradient check · numerical vs. analytic',
-  nanogpt: 'nano-GPT · char transformer (forward)',
+  nanogpt: 'nano-GPT · char transformer (forward · backprop · train)',
 };
 const GROUP_ORDER: CheckGroup[] = [
   'matmul',

@@ -604,10 +604,132 @@ async function gatherCheck(images = 20, pixels = 16, batch = 5, seed = 83): Prom
   return verdict('data', 'gather batch', `${batch}×${pixels} from ${images} imgs · uint8→f32/255`, m, ms);
 }
 
-// ---- nano-GPT (increment 1: char transformer forward + generation, CPU) ----
-// No GPU oracle to diff against yet — instead we assert the architecture's
-// defining invariants: strict causality (the GPT property), a normalized output
-// distribution, correct layer-norm, and in-vocabulary generation.
+// ---- nano-GPT (char transformer: forward · backprop · training, CPU) ----
+// Forward has no GPU oracle, so we assert the architecture's defining
+// invariants (strict causality, normalized softmax, layer-norm, in-vocab
+// generation). The backward pass IS gradient-checked — numerical vs. analytic,
+// exactly like the MLP — and a short training run proves it actually learns.
+
+// Numerical gradient check on a tiny model: differentiate the loss w.r.t. each
+// parameter by central differences and compare to the analytic backward().
+// A larger init makes attention sharp so gradients are healthy; we verify only
+// the well-conditioned components (|g| above the f32 finite-difference noise
+// floor) — sub-threshold gradients can't be differenced reliably and are skipped.
+function nanoGptGradCheck(): { map: Record<string, { rel: number; n: number }>; ms: number } {
+  const tok = new CharTokenizer('the quick brown fox jumps over.');
+  const cfg = { vocab: tok.vocab, dEmbed: 8, dFF: 16, blockSize: 8 };
+  const model = new NanoGpt(cfg, 2, 0.5);
+  const full = tok.encode('the quick brown');
+  const T = cfg.blockSize;
+  const ids = full.slice(0, T);
+  const targets = full.slice(1, T + 1);
+
+  model.zeroGrad();
+  model.backward(model.forwardCache(ids), targets); // analytic gradients
+
+  const eps = 1e-3;
+  const GT = 1e-2; // only check entries whose gradient clears the noise floor
+  const map: Record<string, { rel: number; n: number }> = {};
+  const t0 = performance.now();
+  for (const p of model.params()) {
+    let maxRel = 0;
+    let n = 0;
+    for (let e = 0; e < p.w.length; e++) {
+      if (Math.abs(p.g[e]) < GT) continue;
+      n++;
+      const orig = p.w[e];
+      p.w[e] = orig + eps;
+      const lp = model.forwardLoss(ids, targets);
+      p.w[e] = orig - eps;
+      const lm = model.forwardLoss(ids, targets);
+      p.w[e] = orig;
+      const num = (lp - lm) / (2 * eps);
+      const rel = Math.abs(num - p.g[e]) / (Math.abs(num) + Math.abs(p.g[e]) + 1e-12);
+      if (rel > maxRel) maxRel = rel;
+    }
+    map[p.name] = { rel: maxRel, n };
+  }
+  return { map, ms: performance.now() - t0 };
+}
+
+// Train a small model with Adam until it overfits a sentence, then read it back
+// greedily — the end-to-end proof that the verified gradients actually learn.
+function nanoGptTrainDemo(): {
+  initial: number;
+  finalLoss: number;
+  sample: string;
+  steps: number;
+  pass: boolean;
+  ms: number;
+} {
+  const text = 'the quick brown fox jumps over the lazy dog. ';
+  const tok = new CharTokenizer(text);
+  const cfg = { vocab: tok.vocab, dEmbed: 32, dFF: 64, blockSize: 16 };
+  const model = new NanoGpt(cfg, 3);
+  const data = tok.encode(text + text); // a little repetition to train over
+  const T = cfg.blockSize;
+  const rng = mulberry32(5);
+
+  const ps = model.params();
+  const mState = ps.map((p) => new Float32Array(p.w.length));
+  const vState = ps.map((p) => new Float32Array(p.w.length));
+  const lr = 0.01;
+  const b1 = 0.9;
+  const b2 = 0.999;
+  const eps = 1e-8;
+  const STEPS = 450;
+
+  const vocab = cfg.vocab;
+  // stable loss measure: mean CE over windows tiled across the whole corpus
+  const corpusLoss = (): number => {
+    let sum = 0;
+    let count = 0;
+    for (let start = 0; start + T + 1 <= data.length; start += 3) {
+      sum += NanoGpt.crossEntropy(
+        model.forward(data.slice(start, start + T)),
+        data.slice(start + 1, start + T + 1),
+        T,
+        vocab,
+      ).loss;
+      count++;
+    }
+    return sum / count;
+  };
+
+  const t0 = performance.now();
+  const initial = corpusLoss();
+  for (let s = 0; s < STEPS; s++) {
+    const start = Math.floor(rng() * (data.length - T - 1));
+    const ids = data.slice(start, start + T);
+    const targets = data.slice(start + 1, start + T + 1);
+    model.zeroGrad();
+    const c = model.forwardCache(ids);
+    model.backward(c, targets);
+    const bc1 = 1 - Math.pow(b1, s + 1);
+    const bc2 = 1 - Math.pow(b2, s + 1);
+    for (let pi = 0; pi < ps.length; pi++) {
+      const w = ps[pi].w;
+      const g = ps[pi].g;
+      const mm = mState[pi];
+      const vv = vState[pi];
+      for (let i = 0; i < w.length; i++) {
+        mm[i] = b1 * mm[i] + (1 - b1) * g[i];
+        vv[i] = b2 * vv[i] + (1 - b2) * g[i] * g[i];
+        w[i] -= (lr * (mm[i] / bc1)) / (Math.sqrt(vv[i] / bc2) + eps);
+      }
+    }
+  }
+  const finalLoss = corpusLoss();
+  const sample = tok.decode(model.generate(tok.encode('the q'), 40, 0, mulberry32(0)));
+  return {
+    initial,
+    finalLoss,
+    sample,
+    steps: STEPS,
+    pass: finalLoss < 0.5,
+    ms: performance.now() - t0,
+  };
+}
 
 function nanoGptCheckSuite(): CheckResult[] {
   const out: CheckResult[] = [];
@@ -722,6 +844,48 @@ function nanoGptCheckSuite(): CheckResult[] {
       pass: ok,
     });
   }
+
+  // 5–7) backward pass: numerical gradient check across every parameter,
+  // grouped by block. This is the real proof that backprop through softmax
+  // attention + layer-norm is correct.
+  const gc = nanoGptGradCheck();
+  console.info('[nano-GPT] grad-check (rel err, #entries) per param:', gc.map);
+  const gradRow = (label: string, names: string[], ms: number) => {
+    let rel = 0;
+    let n = 0;
+    for (const nm of names) {
+      rel = Math.max(rel, gc.map[nm].rel);
+      n += gc.map[nm].n;
+    }
+    out.push({
+      group: 'nanogpt',
+      name: label,
+      detail: `${n} well-conditioned entries · central diff ε=1e-3`,
+      maxAbsErr: rel,
+      maxRelErr: rel,
+      ms,
+      pass: n > 0 && Number.isFinite(rel) && rel < 2e-2,
+    });
+  };
+  gradRow('∂ attention', ['Wq', 'Wk', 'Wv', 'Wo', 'ln1.g', 'ln1.b'], gc.ms);
+  gradRow('∂ MLP', ['Wff1', 'bff1', 'Wff2', 'bff2', 'ln2.g', 'ln2.b'], 0);
+  gradRow('∂ embed + head', ['tokEmb', 'posEmb', 'head', 'lnf.g', 'lnf.b'], 0);
+
+  // 8) training: it learns. Overfit the corpus and read back a sample.
+  const tr = nanoGptTrainDemo();
+  console.info(
+    `[nano-GPT] train loss ${tr.initial.toFixed(3)} → ${tr.finalLoss.toFixed(3)} · sample: "${tr.sample}"`,
+  );
+  const snippet = tr.sample.replace(/\s+/g, ' ').trim().slice(0, 30);
+  out.push({
+    group: 'nanogpt',
+    name: 'train · writes',
+    detail: `${tr.steps} steps · loss ${tr.initial.toFixed(2)}→${tr.finalLoss.toFixed(2)} · "${snippet}…"`,
+    maxAbsErr: tr.finalLoss,
+    maxRelErr: tr.finalLoss / tr.initial,
+    ms: tr.ms,
+    pass: tr.pass,
+  });
 
   return out;
 }

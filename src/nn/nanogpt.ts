@@ -143,6 +143,122 @@ function randn(n: number, std: number, rng: () => number): Float32Array {
   return o;
 }
 
+// ---- backward-pass helpers ----
+
+// (aᵀ @ b): a is [M×K], b is [M×N] → [K×N].  Used for weight gradients.
+function matmulATB(a: Float32Array, b: Float32Array, M: number, K: number, N: number): Float32Array {
+  const out = new Float32Array(K * N);
+  for (let i = 0; i < M; i++) {
+    for (let p = 0; p < K; p++) {
+      const av = a[i * K + p];
+      if (av === 0) continue;
+      const brow = i * N;
+      const orow = p * N;
+      for (let q = 0; q < N; q++) out[orow + q] += av * b[brow + q];
+    }
+  }
+  return out;
+}
+
+// (a @ bᵀ): a is [M×N], b is [K×N] → [M×K].  Used for input gradients.
+function matmulABT(a: Float32Array, b: Float32Array, M: number, K: number, N: number): Float32Array {
+  const out = new Float32Array(M * K);
+  for (let i = 0; i < M; i++) {
+    const arow = i * N;
+    for (let p = 0; p < K; p++) {
+      const brow = p * N;
+      let s = 0;
+      for (let j = 0; j < N; j++) s += a[arow + j] * b[brow + j];
+      out[i * K + p] = s;
+    }
+  }
+  return out;
+}
+
+function colSum(m: Float32Array, rows: number, d: number): Float32Array {
+  const o = new Float32Array(d);
+  for (let r = 0; r < rows; r++) for (let i = 0; i < d; i++) o[i] += m[r * d + i];
+  return o;
+}
+
+function addInto(dst: Float32Array, src: Float32Array): void {
+  for (let i = 0; i < dst.length; i++) dst[i] += src[i];
+}
+
+// derivative of the tanh-approx GELU, evaluated at the pre-activation x.
+function geluGrad(x: number): number {
+  const c = Math.sqrt(2 / Math.PI);
+  const u = c * (x + 0.044715 * x * x * x);
+  const t = Math.tanh(u);
+  const du = c * (1 + 3 * 0.044715 * x * x);
+  return 0.5 * (1 + t) + 0.5 * x * (1 - t * t) * du;
+}
+
+// Backward through row-wise layer norm. Recomputes μ/σ from the cached input.
+// Returns dInput and accumulated dγ, dβ.
+function layerNormBackward(
+  dy: Float32Array,
+  xIn: Float32Array,
+  gamma: Float32Array,
+  rows: number,
+  d: number,
+): { dx: Float32Array; dgamma: Float32Array; dbeta: Float32Array } {
+  const dx = new Float32Array(rows * d);
+  const dgamma = new Float32Array(d);
+  const dbeta = new Float32Array(d);
+  const xhat = new Float32Array(d);
+  const dxhat = new Float32Array(d);
+  for (let r = 0; r < rows; r++) {
+    const off = r * d;
+    let mean = 0;
+    for (let i = 0; i < d; i++) mean += xIn[off + i];
+    mean /= d;
+    let varc = 0;
+    for (let i = 0; i < d; i++) {
+      const v = xIn[off + i] - mean;
+      varc += v * v;
+    }
+    varc /= d;
+    const inv = 1 / Math.sqrt(varc + LN_EPS);
+    let sumDxhat = 0;
+    let sumDxhatXhat = 0;
+    for (let i = 0; i < d; i++) {
+      const xh = (xIn[off + i] - mean) * inv;
+      xhat[i] = xh;
+      const dyi = dy[off + i];
+      dbeta[i] += dyi;
+      dgamma[i] += dyi * xh;
+      const dxh = dyi * gamma[i];
+      dxhat[i] = dxh;
+      sumDxhat += dxh;
+      sumDxhatXhat += dxh * xh;
+    }
+    for (let i = 0; i < d; i++)
+      dx[off + i] = inv * (dxhat[i] - sumDxhat / d - xhat[i] * (sumDxhatXhat / d));
+  }
+  return { dx, dgamma, dbeta };
+}
+
+/** Every intermediate of one forward pass, retained for backprop. */
+export interface NanoGptCache {
+  ids: number[];
+  t: number;
+  x: Float32Array; // embeddings (residual stream in)
+  h: Float32Array; // ln1 output
+  Q: Float32Array;
+  K: Float32Array;
+  V: Float32Array;
+  attn: Float32Array; // [t×t] lower-triangular attention weights
+  ctx: Float32Array;
+  xa: Float32Array; // after attention residual
+  h2: Float32Array; // ln2 output
+  f: Float32Array; // MLP hidden, pre-GELU
+  fg: Float32Array; // MLP hidden, post-GELU
+  xb: Float32Array; // after MLP residual
+  xf: Float32Array; // final ln output
+  logits: Float32Array;
+}
+
 /** A single-block, single-head char-level GPT. Forward + generate only. */
 export class NanoGpt {
   readonly cfg: NanoGptConfig;
@@ -168,11 +284,30 @@ export class NanoGpt {
   readonly lnfb: Float32Array;
   readonly head: Float32Array; // [dE × vocab]
 
-  constructor(cfg: NanoGptConfig, seed = 1) {
+  // gradient accumulators (one per parameter above, same shapes)
+  readonly dTokEmb: Float32Array;
+  readonly dPosEmb: Float32Array;
+  readonly dLn1g: Float32Array;
+  readonly dLn1b: Float32Array;
+  readonly dWq: Float32Array;
+  readonly dWk: Float32Array;
+  readonly dWv: Float32Array;
+  readonly dWo: Float32Array;
+  readonly dLn2g: Float32Array;
+  readonly dLn2b: Float32Array;
+  readonly dWff1: Float32Array;
+  readonly dbff1: Float32Array;
+  readonly dWff2: Float32Array;
+  readonly dbff2: Float32Array;
+  readonly dLnfg: Float32Array;
+  readonly dLnfb: Float32Array;
+  readonly dHead: Float32Array;
+
+  constructor(cfg: NanoGptConfig, seed = 1, initStd = 0.02) {
     this.cfg = cfg;
     const { vocab, dEmbed: dE, dFF } = cfg;
     const rng = mulberry32(seed);
-    const s = 0.02; // GPT-style small init
+    const s = initStd; // GPT-style small init by default; larger for grad-checking
     this.tokEmb = randn(vocab * dE, s, rng);
     this.posEmb = randn(cfg.blockSize * dE, s, rng);
     this.ln1g = new Float32Array(dE).fill(1);
@@ -190,15 +325,34 @@ export class NanoGpt {
     this.lnfg = new Float32Array(dE).fill(1);
     this.lnfb = new Float32Array(dE);
     this.head = randn(dE * vocab, s, rng);
+
+    this.dTokEmb = new Float32Array(vocab * dE);
+    this.dPosEmb = new Float32Array(cfg.blockSize * dE);
+    this.dLn1g = new Float32Array(dE);
+    this.dLn1b = new Float32Array(dE);
+    this.dWq = new Float32Array(dE * dE);
+    this.dWk = new Float32Array(dE * dE);
+    this.dWv = new Float32Array(dE * dE);
+    this.dWo = new Float32Array(dE * dE);
+    this.dLn2g = new Float32Array(dE);
+    this.dLn2b = new Float32Array(dE);
+    this.dWff1 = new Float32Array(dE * dFF);
+    this.dbff1 = new Float32Array(dFF);
+    this.dWff2 = new Float32Array(dFF * dE);
+    this.dbff2 = new Float32Array(dE);
+    this.dLnfg = new Float32Array(dE);
+    this.dLnfb = new Float32Array(dE);
+    this.dHead = new Float32Array(dE * vocab);
   }
 
-  /** Forward over a context of t ≤ blockSize token ids. Returns logits [t × vocab]. */
-  forward(ids: number[]): Float32Array {
+  // The forward pass. When `cache` is supplied every intermediate is retained
+  // so backward() can run; otherwise it's a lean inference pass (generation).
+  private run(ids: number[], cache?: NanoGptCache): Float32Array {
     const { dEmbed: dE, dFF, vocab } = this.cfg;
     const t = ids.length;
 
-    // token + position embeddings
-    let x = new Float32Array(t * dE);
+    // token + position embeddings (the residual stream input)
+    const x = new Float32Array(t * dE);
     for (let i = 0; i < t; i++) {
       const te = ids[i] * dE;
       const pe = i * dE;
@@ -212,6 +366,7 @@ export class NanoGpt {
     const V = matmul(h, this.Wv, t, dE, dE);
     const scale = 1 / Math.sqrt(dE);
     const ctx = new Float32Array(t * dE);
+    const attn = cache ? new Float32Array(t * t) : null;
     const scores = new Float32Array(t); // reused per query row, length ≤ t
     for (let i = 0; i < t; i++) {
       for (let j = 0; j <= i; j++) {
@@ -222,25 +377,60 @@ export class NanoGpt {
       softmaxRow(scores, 0, i + 1); // causal: only keys 0..i
       for (let j = 0; j <= i; j++) {
         const a = scores[j];
+        if (attn) attn[i * t + j] = a;
         for (let c = 0; c < dE; c++) ctx[i * dE + c] += a * V[j * dE + c];
       }
     }
     const o = matmul(ctx, this.Wo, t, dE, dE);
-    for (let i = 0; i < t * dE; i++) x[i] += o[i]; // residual
+    const xa = new Float32Array(t * dE);
+    for (let i = 0; i < t * dE; i++) xa[i] = x[i] + o[i]; // residual
 
     // ---- MLP (pre-LN) ----
-    const h2 = layerNormRows(x, t, dE, this.ln2g, this.ln2b);
+    const h2 = layerNormRows(xa, t, dE, this.ln2g, this.ln2b);
     const f = matmul(h2, this.Wff1, t, dE, dFF);
     for (let i = 0; i < t; i++) for (let c = 0; c < dFF; c++) f[i * dFF + c] += this.bff1[c];
-    geluInPlace(f);
-    const f2 = matmul(f, this.Wff2, t, dFF, dE);
+    const fg = f.slice(); // keep f (pre-GELU) for the backward derivative
+    geluInPlace(fg);
+    const f2 = matmul(fg, this.Wff2, t, dFF, dE);
     for (let i = 0; i < t; i++) for (let c = 0; c < dE; c++) f2[i * dE + c] += this.bff2[c];
-    for (let i = 0; i < t * dE; i++) x[i] += f2[i]; // residual
+    const xb = new Float32Array(t * dE);
+    for (let i = 0; i < t * dE; i++) xb[i] = xa[i] + f2[i]; // residual
 
     // ---- head ----
-    const xf = layerNormRows(x, t, dE, this.lnfg, this.lnfb);
+    const xf = layerNormRows(xb, t, dE, this.lnfg, this.lnfb);
     const logits = matmul(xf, this.head, t, dE, vocab);
+
+    if (cache) {
+      cache.ids = ids;
+      cache.t = t;
+      cache.x = x;
+      cache.h = h;
+      cache.Q = Q;
+      cache.K = K;
+      cache.V = V;
+      cache.attn = attn as Float32Array;
+      cache.ctx = ctx;
+      cache.xa = xa;
+      cache.h2 = h2;
+      cache.f = f;
+      cache.fg = fg;
+      cache.xb = xb;
+      cache.xf = xf;
+      cache.logits = logits;
+    }
     return logits;
+  }
+
+  /** Forward over a context of t ≤ blockSize token ids. Returns logits [t × vocab]. */
+  forward(ids: number[]): Float32Array {
+    return this.run(ids);
+  }
+
+  /** Forward that retains every intermediate, ready for a backward() pass. */
+  forwardCache(ids: number[]): NanoGptCache {
+    const cache = {} as NanoGptCache;
+    this.run(ids, cache);
+    return cache;
   }
 
   /** Autoregressively sample `count` tokens after the prompt ids. temperature 0
@@ -275,5 +465,162 @@ export class NanoGpt {
       ids.push(next);
     }
     return ids;
+  }
+
+  /** Mean cross-entropy of the next-char predictions, plus the per-row softmax
+   *  probabilities (reused by backward). */
+  static crossEntropy(
+    logits: Float32Array,
+    targets: number[],
+    t: number,
+    vocab: number,
+  ): { loss: number; probs: Float32Array } {
+    const probs = new Float32Array(t * vocab);
+    let loss = 0;
+    for (let i = 0; i < t; i++) {
+      const off = i * vocab;
+      for (let v = 0; v < vocab; v++) probs[off + v] = logits[off + v];
+      softmaxRow(probs, off, vocab);
+      loss += -Math.log(Math.max(probs[off + targets[i]], 1e-12));
+    }
+    return { loss: loss / t, probs };
+  }
+
+  /** Scalar loss for an (ids, targets) pair — the function gradient checking
+   *  differentiates numerically. */
+  forwardLoss(ids: number[], targets: number[]): number {
+    const logits = this.run(ids);
+    return NanoGpt.crossEntropy(logits, targets, ids.length, this.cfg.vocab).loss;
+  }
+
+  /** Parameters paired with their gradient accumulators, in a stable order. */
+  params(): Array<{ name: string; w: Float32Array; g: Float32Array }> {
+    return [
+      { name: 'tokEmb', w: this.tokEmb, g: this.dTokEmb },
+      { name: 'posEmb', w: this.posEmb, g: this.dPosEmb },
+      { name: 'ln1.g', w: this.ln1g, g: this.dLn1g },
+      { name: 'ln1.b', w: this.ln1b, g: this.dLn1b },
+      { name: 'Wq', w: this.Wq, g: this.dWq },
+      { name: 'Wk', w: this.Wk, g: this.dWk },
+      { name: 'Wv', w: this.Wv, g: this.dWv },
+      { name: 'Wo', w: this.Wo, g: this.dWo },
+      { name: 'ln2.g', w: this.ln2g, g: this.dLn2g },
+      { name: 'ln2.b', w: this.ln2b, g: this.dLn2b },
+      { name: 'Wff1', w: this.Wff1, g: this.dWff1 },
+      { name: 'bff1', w: this.bff1, g: this.dbff1 },
+      { name: 'Wff2', w: this.Wff2, g: this.dWff2 },
+      { name: 'bff2', w: this.bff2, g: this.dbff2 },
+      { name: 'lnf.g', w: this.lnfg, g: this.dLnfg },
+      { name: 'lnf.b', w: this.lnfb, g: this.dLnfb },
+      { name: 'head', w: this.head, g: this.dHead },
+    ];
+  }
+
+  zeroGrad(): void {
+    for (const p of this.params()) p.g.fill(0);
+  }
+
+  /** Backprop the mean cross-entropy loss, accumulating into the d* arrays
+   *  (call zeroGrad() first). The chain: dlogits = (softmax − onehot)/t, then
+   *  back through the head, final layer-norm, the MLP block, the attention
+   *  block (including the softmax over causal scores), and the embeddings. */
+  backward(c: NanoGptCache, targets: number[]): void {
+    const { dEmbed: dE, dFF, vocab } = this.cfg;
+    const t = c.t;
+
+    // ---- loss → logits ----
+    const { probs } = NanoGpt.crossEntropy(c.logits, targets, t, vocab);
+    const dlogits = new Float32Array(t * vocab);
+    for (let i = 0; i < t; i++) {
+      const off = i * vocab;
+      for (let v = 0; v < vocab; v++) dlogits[off + v] = probs[off + v] / t;
+      dlogits[off + targets[i]] -= 1 / t;
+    }
+
+    // ---- head ----
+    addInto(this.dHead, matmulATB(c.xf, dlogits, t, dE, vocab));
+    const dxf = matmulABT(dlogits, this.head, t, dE, vocab);
+
+    // ---- final LN ----
+    const lnf = layerNormBackward(dxf, c.xb, this.lnfg, t, dE);
+    addInto(this.dLnfg, lnf.dgamma);
+    addInto(this.dLnfb, lnf.dbeta);
+
+    // residual: xb = xa + f2  →  both branches receive lnf.dx
+    const dxa = lnf.dx.slice();
+    const df2 = lnf.dx;
+
+    // ---- MLP ----
+    addInto(this.dWff2, matmulATB(c.fg, df2, t, dFF, dE));
+    addInto(this.dbff2, colSum(df2, t, dE));
+    const dfg = matmulABT(df2, this.Wff2, t, dFF, dE);
+    const df = new Float32Array(t * dFF);
+    for (let i = 0; i < t * dFF; i++) df[i] = dfg[i] * geluGrad(c.f[i]);
+    addInto(this.dWff1, matmulATB(c.h2, df, t, dE, dFF));
+    addInto(this.dbff1, colSum(df, t, dFF));
+    const dh2 = matmulABT(df, this.Wff1, t, dE, dFF);
+    const ln2 = layerNormBackward(dh2, c.xa, this.ln2g, t, dE);
+    addInto(this.dLn2g, ln2.dgamma);
+    addInto(this.dLn2b, ln2.dbeta);
+    for (let i = 0; i < t * dE; i++) dxa[i] += ln2.dx[i];
+
+    // residual: xa = x + o  →  both branches receive dxa
+    const dx = dxa.slice();
+    const dout = dxa;
+
+    // ---- attention output projection ----
+    addInto(this.dWo, matmulATB(c.ctx, dout, t, dE, dE));
+    const dctx = matmulABT(dout, this.Wo, t, dE, dE);
+
+    // ---- attention core (causal softmax over scores) ----
+    const scale = 1 / Math.sqrt(dE);
+    const dQ = new Float32Array(t * dE);
+    const dK = new Float32Array(t * dE);
+    const dV = new Float32Array(t * dE);
+    for (let i = 0; i < t; i++) {
+      const datt = new Float32Array(i + 1); // ∂L/∂attn[i][j]
+      for (let j = 0; j <= i; j++) {
+        let dot = 0;
+        for (let cc = 0; cc < dE; cc++) dot += dctx[i * dE + cc] * c.V[j * dE + cc];
+        datt[j] = dot;
+        const a = c.attn[i * t + j];
+        for (let cc = 0; cc < dE; cc++) dV[j * dE + cc] += a * dctx[i * dE + cc];
+      }
+      let sumd = 0;
+      for (let j = 0; j <= i; j++) sumd += datt[j] * c.attn[i * t + j];
+      for (let j = 0; j <= i; j++) {
+        const ds = c.attn[i * t + j] * (datt[j] - sumd) * scale; // softmax back · scale
+        for (let cc = 0; cc < dE; cc++) {
+          dQ[i * dE + cc] += ds * c.K[j * dE + cc];
+          dK[j * dE + cc] += ds * c.Q[i * dE + cc];
+        }
+      }
+    }
+
+    // ---- Q,K,V projections ----
+    addInto(this.dWq, matmulATB(c.h, dQ, t, dE, dE));
+    addInto(this.dWk, matmulATB(c.h, dK, t, dE, dE));
+    addInto(this.dWv, matmulATB(c.h, dV, t, dE, dE));
+    const dh = matmulABT(dQ, this.Wq, t, dE, dE);
+    const dhk = matmulABT(dK, this.Wk, t, dE, dE);
+    const dhv = matmulABT(dV, this.Wv, t, dE, dE);
+    for (let i = 0; i < t * dE; i++) dh[i] += dhk[i] + dhv[i];
+
+    // ---- first LN ----
+    const ln1 = layerNormBackward(dh, c.x, this.ln1g, t, dE);
+    addInto(this.dLn1g, ln1.dgamma);
+    addInto(this.dLn1b, ln1.dbeta);
+    for (let i = 0; i < t * dE; i++) dx[i] += ln1.dx[i];
+
+    // ---- embeddings (scatter-add; a token id can repeat in the context) ----
+    for (let i = 0; i < t; i++) {
+      const ti = c.ids[i] * dE;
+      const pi = i * dE;
+      for (let cc = 0; cc < dE; cc++) {
+        const g = dx[i * dE + cc];
+        this.dTokEmb[ti + cc] += g;
+        this.dPosEmb[pi + cc] += g;
+      }
+    }
   }
 }
