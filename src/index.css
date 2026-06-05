@@ -223,6 +223,7 @@ body {
 
 .grid {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 22px;
 }
 .grid-2 {
@@ -234,6 +235,7 @@ body {
 .card {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   background: var(--surface);
   border: var(--bw) solid var(--black);
   border-radius: var(--radius);
@@ -957,6 +959,9 @@ canvas.px {
   color: var(--purple-deep);
 }
 .nlab-input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   font-family: var(--mono);
   font-size: 14px;
   font-weight: 600;
@@ -1496,6 +1501,129 @@ canvas.px {
     grid-template-columns: repeat(2, 1fr);
   }
   .build-cols {
+    grid-template-columns: 1fr;
+  }
+}
+
+.diag-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 640px) {
+  .app {
+    padding: 0 13px 56px;
+  }
+  .masthead {
+    padding: 18px 0 14px;
+    gap: 12px;
+  }
+  .wordmark {
+    font-size: 34px;
+  }
+  .wordmark .dot {
+    width: 14px;
+    height: 14px;
+    margin-left: 6px;
+  }
+  .statline {
+    gap: 7px;
+    font-size: 10px;
+  }
+  .statline > span,
+  .pill {
+    padding: 6px 10px;
+    box-shadow: 2px 2px 0 var(--black);
+  }
+  .nav button {
+    padding: 6px 12px;
+  }
+  .overview {
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .ov-card {
+    padding: 13px 14px;
+  }
+  .ov-v {
+    font-size: 20px;
+  }
+  .grid {
+    gap: 16px;
+  }
+  .card {
+    padding: 0 15px 18px;
+  }
+  .card h2 {
+    margin: 0 -15px 16px;
+    padding: 13px 15px;
+    font-size: 14px;
+    flex-wrap: wrap;
+    gap: 8px 10px;
+  }
+  .card h2 .meta {
+    margin-left: 0;
+    flex-basis: 100%;
+  }
+  .grid-2 {
+    grid-template-columns: 1fr;
+  }
+  .kv {
+    grid-template-columns: 96px 1fr;
+    gap: 9px 12px;
+    font-size: 12px;
+  }
+  .specs {
+    grid-template-columns: 1fr;
+  }
+  .scope-grid {
+    grid-template-columns: 1fr;
+  }
+  table.diag th:nth-child(3),
+  table.diag td:nth-child(3),
+  table.diag th:nth-child(4),
+  table.diag td:nth-child(4),
+  table.diag th:nth-child(5),
+  table.diag td:nth-child(5),
+  table.diag th:nth-child(6),
+  table.diag td:nth-child(6) {
+    display: none;
+  }
+  table.diag {
+    table-layout: fixed;
+  }
+  table.diag td {
+    padding: 9px 7px;
+    font-size: 12px;
+  }
+  table.diag th {
+    padding: 9px 7px;
+    font-size: 9.5px;
+  }
+  table.diag td.l {
+    white-space: normal;
+    word-break: break-word;
+  }
+  table.diag th:nth-child(1),
+  table.diag td:nth-child(1) {
+    width: 36%;
+  }
+  table.diag th:nth-child(2),
+  table.diag td:nth-child(2) {
+    width: 42%;
+  }
+  table.diag th:nth-child(7),
+  table.diag td:nth-child(7) {
+    width: 22%;
+  }
+  .summary .big {
+    font-size: 20px;
+  }
+  .about-title {
+    font-size: clamp(25px, 8.5vw, 34px);
+  }
+  .feat-grid {
     grid-template-columns: 1fr;
   }
 }

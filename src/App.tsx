@@ -312,7 +312,7 @@ function SelfTestView({
         <span className="sub">GPU kernels diffed against an f64 CPU oracle (rel. err &lt; 1e-3) · architecture invariants checked</span>
       </div>
 
-      <table className="diag">
+      <div className="diag-wrap"><table className="diag">
         <thead>
           <tr>
             <th className="l">op</th>
@@ -352,7 +352,7 @@ function SelfTestView({
             );
           })}
         </tbody>
-      </table>
+      </table></div>
 
       <div className="row" style={{ marginTop: 20 }}>
         <button className="btn" onClick={onRerun} disabled={running}>
@@ -476,7 +476,7 @@ function ProfilerTable({
   const maxG = Math.max(1, ...rows.map((r) => r.gflops ?? 0));
   return (
     <>
-      <table className="diag">
+      <div className="diag-wrap"><table className="diag">
         <thead>
           <tr>
             <th className="l">kernel</th>
@@ -506,7 +506,7 @@ function ProfilerTable({
             </tr>
           ))}
         </tbody>
-      </table>
+      </table></div>
       <div className="row" style={{ marginTop: 18 }}>
         <button className="btn ghost" onClick={onRerun} disabled={running}>
           {running ? 'profiling…' : 're-run'}
