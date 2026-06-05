@@ -859,3 +859,30 @@ canvas.px {
   border-radius: 50%;
   border: 1.5px solid var(--black);
 }
+
+/* ---- profiler bars ---- */
+.perfwrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.perfbar {
+  flex: 1;
+  min-width: 80px;
+  max-width: 220px;
+  height: 14px;
+  background: var(--surface-2);
+  border: 2px solid var(--black);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.perfbar-fill {
+  height: 100%;
+  background: var(--purple);
+}
+.perfwrap span {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 12px;
+  white-space: nowrap;
+}

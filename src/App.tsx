@@ -7,6 +7,7 @@ import {
   type TrainingResult,
 } from './gpu/selftest';
 import Dashboard from './ui/Dashboard';
+import { runProfile, type ProfileRow } from './gpu/profile';
 
 interface DeviceLimits {
   maxBufferSize: number;
@@ -129,6 +130,8 @@ export default function App() {
             <SelfTestView report={report} running={running} onRerun={executeSelfTest} />
           </section>
         )}
+
+        {phase.kind === 'ready' && <ProfilerCard />}
 
         {phase.kind === 'unsupported' && (
           <section className="card">
@@ -403,6 +406,93 @@ function Sparkline({ data, width = 600, height = 76 }: { data: number[]; width?:
         strokeLinejoin="round"
       />
     </svg>
+  );
+}
+
+function ProfilerCard() {
+  const [rows, setRows] = useState<ProfileRow[] | null>(null);
+  const [running, setRunning] = useState(false);
+  const run = useCallback(async () => {
+    setRunning(true);
+    try {
+      setRows(await runProfile());
+    } finally {
+      setRunning(false);
+    }
+  }, []);
+  return (
+    <section className="card" id="profile">
+      <h2>
+        <span className="ch">CH4</span>GPU profiler
+        <span className="meta">amortized kernel throughput</span>
+      </h2>
+      {!rows && (
+        <div className="row">
+          <button className="btn" onClick={run} disabled={running}>
+            {running ? 'profiling…' : 'run profiler'}
+          </button>
+          <span className="muted" style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>
+            warms up, then times each kernel over many GPU dispatches (no readback)
+          </span>
+        </div>
+      )}
+      {rows && <ProfilerTable rows={rows} running={running} onRerun={run} />}
+    </section>
+  );
+}
+
+function ProfilerTable({
+  rows,
+  running,
+  onRerun,
+}: {
+  rows: ProfileRow[];
+  running: boolean;
+  onRerun: () => void;
+}) {
+  const maxG = Math.max(1, ...rows.map((r) => r.gflops ?? 0));
+  return (
+    <>
+      <table className="diag">
+        <thead>
+          <tr>
+            <th className="l">kernel</th>
+            <th className="l">shape</th>
+            <th>gpu time</th>
+            <th className="l">throughput</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i}>
+              <td className="l strong">{r.label}</td>
+              <td className="l detail">{r.detail}</td>
+              <td>{r.ms < 1 ? `${Math.round(r.ms * 1000)} µs` : `${r.ms.toFixed(2)} ms`}</td>
+              <td className="l">
+                {r.gflops != null ? (
+                  <div className="perfwrap">
+                    <div className="perfbar">
+                      <div className="perfbar-fill" style={{ width: `${(r.gflops / maxG) * 100}%` }} />
+                    </div>
+                    <span>{r.gflops.toFixed(1)} GF/s</span>
+                  </div>
+                ) : (
+                  <span className="detail">{Math.round(1000 / r.ms).toLocaleString()} steps/s</span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="row" style={{ marginTop: 18 }}>
+        <button className="btn ghost" onClick={onRerun} disabled={running}>
+          {running ? 'profiling…' : 're-run'}
+        </button>
+        <span className="muted" style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>
+          amortized GPU time over many dispatches · no readback · real throughput
+        </span>
+      </div>
+    </>
   );
 }
 
