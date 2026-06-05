@@ -16,10 +16,11 @@
 //   ✅ Increment 4: a live dashboard panel (CH5, NanoGptLab) — train it in the
 //        browser and watch the greedy output sharpen into the target sentence as
 //        the loss falls.
-//   ⬜ Increment 3: port the hot paths (QKᵀ, softmax, A·V, the projections) to
-//        WGSL compute shaders — most matmuls reuse the kernels we already have;
-//        the new ones are causal-masked softmax and layer-norm. (The remaining
-//        one — an optimization; the CPU engine above is already correct + live.)
+//   ✅ Increment 3 (forward): the forward pass on WGSL compute shaders — new
+//        layer-norm / causal-softmax / GELU / residual-add kernels (see
+//        nanogpt-gpu.ts), with the projections and attention products reusing
+//        the matmul kernels. Verified GPU-vs-CPU to ~1e-7 in the self-test. (A
+//        GPU backward/training port could follow; the CPU engine already trains.)
 //
 // Everything is f32/f64 CPU math here; deterministic given a seeded RNG so the
 // self-test is reproducible.

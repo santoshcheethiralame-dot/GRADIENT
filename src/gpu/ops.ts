@@ -23,6 +23,10 @@ import softmaxCeBackwardSrc from './shaders/softmax_ce_backward.wgsl?raw';
 import sgdSrc from './shaders/sgd.wgsl?raw';
 import adamSrc from './shaders/adam.wgsl?raw';
 import gatherSrc from './shaders/gather.wgsl?raw';
+import layerNormSrc from './shaders/layer_norm.wgsl?raw';
+import causalSoftmaxSrc from './shaders/causal_softmax.wgsl?raw';
+import geluSrc from './shaders/gelu.wgsl?raw';
+import addSrc from './shaders/add.wgsl?raw';
 
 const WORKGROUP = 16; // matches @workgroup_size(16,16) in the 2-D shaders
 const WG1D = 64; // matches @workgroup_size(64) in the 1-D shaders
@@ -545,6 +549,84 @@ export function gather(
     ],
     batchSize * pixels,
     'gather',
+  );
+  return o;
+}
+
+// =====================================================================
+// TRANSFORMER (nano-GPT GPU forward)
+// =====================================================================
+
+/** out = gelu(x), tanh approximation. */
+export function gelu(device: GPUDevice, x: GpuTensor, out?: GpuTensor): GpuTensor {
+  return elementwise(device, 'gelu', geluSrc, x, out);
+}
+
+/** out = a + b, elementwise (matching shapes). Used for residual connections. */
+export function addTensors(
+  device: GPUDevice,
+  a: GpuTensor,
+  b: GpuTensor,
+  out?: GpuTensor,
+): GpuTensor {
+  return elementwise2(device, 'add', addSrc, a, b, out);
+}
+
+/** Row-wise layer norm with affine params γ, β (both [N]). */
+export function layerNorm(
+  device: GPUDevice,
+  x: GpuTensor,
+  gamma: GpuTensor,
+  beta: GpuTensor,
+  out?: GpuTensor,
+): GpuTensor {
+  if (x.shape.length !== 2) throw new Error('layerNorm: x must be 2-D');
+  const [M, N] = x.shape;
+  if (gamma.size !== N || beta.size !== N) throw new Error(`layerNorm: γ/β must be [${N}]`);
+  const o = out ?? GpuTensor.zeros(device, x.shape, { label: 'layer_norm.out' });
+  dispatch1D(
+    device,
+    getComputePipeline(device, 'layer_norm', layerNormSrc),
+    [
+      { binding: 0, resource: { buffer: x.buffer } },
+      { binding: 1, resource: { buffer: gamma.buffer } },
+      { binding: 2, resource: { buffer: beta.buffer } },
+      { binding: 3, resource: { buffer: o.buffer } },
+      { binding: 4, resource: { buffer: metaBuffer(device, [M, N]) } },
+    ],
+    M,
+    'layer_norm',
+  );
+  return o;
+}
+
+/** Causal softmax over a square [T×T] score matrix. Logits are scaled by
+ *  `scale` first; row i attends to keys 0..i, future positions are zeroed. */
+export function causalSoftmax(
+  device: GPUDevice,
+  scores: GpuTensor,
+  scale: number,
+  out?: GpuTensor,
+): GpuTensor {
+  if (scores.shape.length !== 2 || scores.shape[0] !== scores.shape[1]) {
+    throw new Error('causalSoftmax: scores must be square [T×T]');
+  }
+  const T = scores.shape[0];
+  const o = out ?? GpuTensor.zeros(device, scores.shape, { label: 'causal_softmax.out' });
+  const u = makeUniform(device, 16, (dv) => {
+    dv.setUint32(0, T, true);
+    dv.setFloat32(4, scale, true);
+  });
+  dispatch1D(
+    device,
+    getComputePipeline(device, 'causal_softmax', causalSoftmaxSrc),
+    [
+      { binding: 0, resource: { buffer: scores.buffer } },
+      { binding: 1, resource: { buffer: o.buffer } },
+      { binding: 2, resource: { buffer: u } },
+    ],
+    T,
+    'causal_softmax',
   );
   return o;
 }

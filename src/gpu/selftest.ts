@@ -21,6 +21,9 @@ import {
   softmaxCeBackward,
   gather,
   createU32Buffer,
+  layerNorm,
+  causalSoftmax,
+  gelu,
   type MatmulVariant,
 } from './ops';
 import * as ref from '../nn/reference';
@@ -36,6 +39,7 @@ import {
   defaultConfig,
   NANO_CORPUS,
 } from '../nn/nanogpt';
+import { nanoGptGpuForward } from '../nn/nanogpt-gpu';
 
 const TOL = 1e-3; // generous headroom for f32 vs f64 accumulation
 const GRAD_TOL = 2e-2; // central-difference + f32 readback noise
@@ -48,7 +52,8 @@ export type CheckGroup =
   | 'gradcheck'
   | 'optim'
   | 'data'
-  | 'nanogpt';
+  | 'nanogpt'
+  | 'tfgpu';
 
 export interface CheckResult {
   group: CheckGroup;
@@ -890,6 +895,110 @@ function nanoGptCheckSuite(): CheckResult[] {
   return out;
 }
 
+// ---- nano-GPT GPU forward (increment 3) ----
+// The transformer-specific kernels verified against the f64 CPU oracle, then
+// the whole forward pass on the GPU, compared (as next-char probabilities) to
+// the CPU forward.
+
+async function transformerGpuChecks(): Promise<CheckResult[]> {
+  const { device } = await getGpuContext();
+  const out: CheckResult[] = [];
+
+  // GELU
+  {
+    const M = 32;
+    const N = 32;
+    const x = randRange(M * N, 4, mulberry32(201));
+    const tx = GpuTensor.fromArray(device, x, [M, N]);
+    const t0 = performance.now();
+    const ty = gelu(device, tx);
+    const got = await ty.toArray();
+    const ms = performance.now() - t0;
+    const exp = new Float32Array(M * N);
+    const c = 0.7978845608028654;
+    for (let i = 0; i < exp.length; i++) {
+      const v = x[i];
+      exp[i] = 0.5 * v * (1 + Math.tanh(c * (v + 0.044715 * v * v * v)));
+    }
+    const m = ref.compareArrays(got, exp);
+    tx.destroy();
+    ty.destroy();
+    out.push(verdict('tfgpu', 'GELU', `${M}×${N} · tanh approx`, m, ms));
+  }
+
+  // layer norm
+  {
+    const M = 16;
+    const N = 24;
+    const rng = mulberry32(202);
+    const x = randRange(M * N, 3, rng);
+    const g = randRange(N, 1, rng);
+    const b = randRange(N, 1, rng);
+    const tx = GpuTensor.fromArray(device, x, [M, N]);
+    const tg = GpuTensor.fromArray(device, g, [N]);
+    const tb = GpuTensor.fromArray(device, b, [N]);
+    const t0 = performance.now();
+    const ty = layerNorm(device, tx, tg, tb);
+    const got = await ty.toArray();
+    const ms = performance.now() - t0;
+    const m = ref.compareArrays(got, layerNormRows(x, M, N, g, b));
+    for (const z of [tx, tg, tb, ty]) z.destroy();
+    out.push(verdict('tfgpu', 'layer norm', `${M}×${N} · μ/σ + affine`, m, ms));
+  }
+
+  // causal softmax
+  {
+    const T = 12;
+    const sc = randRange(T * T, 3, mulberry32(203));
+    const scale = 1 / Math.sqrt(8);
+    const tx = GpuTensor.fromArray(device, sc, [T, T]);
+    const t0 = performance.now();
+    const ty = causalSoftmax(device, tx, scale);
+    const got = await ty.toArray();
+    const ms = performance.now() - t0;
+    const exp = new Float32Array(T * T);
+    for (let i = 0; i < T; i++) {
+      let mx = -Infinity;
+      for (let j = 0; j <= i; j++) mx = Math.max(mx, sc[i * T + j] * scale);
+      let s = 0;
+      for (let j = 0; j <= i; j++) {
+        const e = Math.exp(sc[i * T + j] * scale - mx);
+        exp[i * T + j] = e;
+        s += e;
+      }
+      for (let j = 0; j <= i; j++) exp[i * T + j] /= s;
+    }
+    const m = ref.compareArrays(got, exp);
+    tx.destroy();
+    ty.destroy();
+    out.push(verdict('tfgpu', 'causal softmax', `${T}×${T} · masked + scaled`, m, ms));
+  }
+
+  // full forward (GPU vs CPU), compared as next-char probabilities
+  {
+    const tok = new CharTokenizer('the quick brown fox.');
+    const cfg = { vocab: tok.vocab, dEmbed: 16, dFF: 32, blockSize: 8 };
+    const model = new NanoGpt(cfg, 4, 0.4);
+    const T = cfg.blockSize;
+    const ids = tok.encode('the quick').slice(0, T);
+    const cpuLogits = model.forward(ids);
+    const t0 = performance.now();
+    const gpuLogits = await nanoGptGpuForward(device, model, ids);
+    const ms = performance.now() - t0;
+    const probsOf = (lg: Float32Array): Float32Array => {
+      const p = lg.slice();
+      for (let i = 0; i < T; i++) softmaxRow(p, i * cfg.vocab, cfg.vocab);
+      return p;
+    };
+    const m = ref.compareArrays(probsOf(gpuLogits), probsOf(cpuLogits));
+    out.push(
+      verdict('tfgpu', 'forward (GPU vs CPU)', `${T}×${cfg.vocab} · full block on GPU`, m, ms, TOL * 3),
+    );
+  }
+
+  return out;
+}
+
 // ---- runner ----
 
 const MATMUL_SHAPES: Array<[number, number, number]> = [
@@ -933,6 +1042,8 @@ export async function runSelfTest(): Promise<SelfTestReport> {
   results.push(await gatherCheck());
 
   results.push(...nanoGptCheckSuite());
+
+  results.push(...(await transformerGpuChecks()));
 
   const training = await trainingDemo();
 
