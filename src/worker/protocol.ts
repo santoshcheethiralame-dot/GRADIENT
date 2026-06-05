@@ -34,6 +34,12 @@ export interface TestAccMsg {
   step: number;
   testAcc: number;
 }
+export interface EmbeddingMsg {
+  type: 'embedding';
+  coords: Float32Array; // [n*2] hidden activations projected to 2-D (PCA), in ~[-1,1]
+  labels: Uint8Array; // [n] true class per point
+  step: number;
+}
 export interface ActivationsMsg {
   type: 'activations';
   input: Float32Array; // [pixels] the probe digit (normalized)
@@ -56,6 +62,7 @@ export type OutMsg =
   | StatusMsg
   | MetricsMsg
   | TestAccMsg
+  | EmbeddingMsg
   | ActivationsMsg
   | ProbsMsg
   | ErrorMsg;

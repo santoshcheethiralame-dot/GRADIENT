@@ -814,10 +814,48 @@ canvas.px {
 .prediction {
   font-family: var(--disp);
   font-weight: 900;
-  font-size: 92px;
+  font-size: 84px;
   line-height: 1;
   color: var(--purple);
   -webkit-text-stroke: 3px var(--black);
-  min-width: 70px;
+  min-width: 64px;
   text-align: center;
+}
+
+/* ---- embedding scatter ---- */
+.embed-row {
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+.embed-canvas {
+  flex: 1;
+  min-width: 260px;
+  height: 300px;
+  border-radius: var(--radius-sm);
+  border: var(--bw) solid var(--black);
+  background: var(--screen);
+  box-shadow: var(--shadow);
+}
+.embed-legend {
+  display: grid;
+  grid-template-columns: repeat(2, auto);
+  gap: 8px 18px;
+  align-content: center;
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--ink);
+}
+.embed-legend span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.embed-legend i {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1.5px solid var(--black);
 }

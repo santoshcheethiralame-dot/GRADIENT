@@ -13,6 +13,7 @@ import { Adam } from '../nn/optimizer';
 import { accuracy } from '../nn/reference';
 import { mulberry32, gaussian } from '../data/synthetic';
 import { loadMnist, type MnistData } from '../data/mnist';
+import { pca2d } from '../nn/pca';
 import type { InMsg, OutMsg } from './protocol';
 
 const sw = self as unknown as DedicatedWorkerGlobalScope;
@@ -100,6 +101,7 @@ async function init(): Promise<void> {
     lr,
   });
   await postActivations();
+  await postEval();
 }
 
 function sampleTrainBatch(): void {
@@ -135,7 +137,7 @@ async function trainChunk(): Promise<void> {
 
   chunkCounter++;
   if (chunkCounter % 2 === 0) await postActivations();
-  if (chunkCounter % 25 === 0) await postTestAcc();
+  if (chunkCounter % 25 === 0) await postEval();
 
   if (running) setTimeout(trainChunk, 0);
 }
@@ -157,10 +159,17 @@ async function postActivations(): Promise<void> {
   ]);
 }
 
-async function postTestAcc(): Promise<void> {
+// One test pass that yields both the test accuracy and the 2-D embedding of the
+// hidden-layer activations (PCA), so the scatter evolves as the net trains.
+async function postEval(): Promise<void> {
   if (!mlp || !data) return;
+  const H = hiddenDim;
   const batches = Math.min(8, Math.floor(data.test.count / B));
+  const N = batches * B;
+  const acts = new Float32Array(N * H);
+  const labels = new Uint8Array(N);
   let accSum = 0;
+
   for (let tb = 0; tb < batches; tb++) {
     for (let i = 0; i < B; i++) {
       const idx = tb * B + i;
@@ -170,9 +179,20 @@ async function postTestAcc(): Promise<void> {
     device.queue.writeBuffer(idxBuf, 0, idxArr);
     gather(device, data.test.packed, idxBuf, B, data.pixels, batchImages);
     mlp.forward(batchImages);
-    accSum += accuracy(await mlp.P.toArray(), labArr, B, C);
+    const [p, a1] = await Promise.all([mlp.P.toArray(), mlp.A1.toArray()]);
+    accSum += accuracy(p, labArr, B, C);
+    for (let i = 0; i < B; i++) {
+      const row = tb * B + i;
+      labels[row] = labArr[i];
+      const dst = row * H;
+      const src = i * H;
+      for (let h = 0; h < H; h++) acts[dst + h] = a1[src + h];
+    }
   }
+
   post({ type: 'testacc', step, testAcc: accSum / batches });
+  const coords = pca2d(acts, N, H);
+  post({ type: 'embedding', coords, labels, step }, [coords.buffer, labels.buffer]);
 }
 
 async function handleInfer(pixels: Float32Array): Promise<void> {

@@ -6,7 +6,7 @@
 // through the worker for live classification.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ActivationsMsg, InMsg, OutMsg } from '../worker/protocol';
+import type { ActivationsMsg, EmbeddingMsg, InMsg, OutMsg } from '../worker/protocol';
 
 interface Info {
   adapter: string;
@@ -29,6 +29,7 @@ interface TrainerRefs {
   lossHist: { current: number[] };
   accHist: { current: number[] };
   activations: { current: ActivationsMsg | null };
+  embedding: { current: EmbeddingMsg | null };
   metrics: { current: Metrics };
   testAcc: { current: number | null };
 }
@@ -49,6 +50,7 @@ function useTrainer() {
       lossHist: { current: [] },
       accHist: { current: [] },
       activations: { current: null },
+      embedding: { current: null },
       metrics: { current: { step: 0, loss: NaN, trainAcc: 0, stepsPerSec: 0 } },
       testAcc: { current: null },
     }),
@@ -105,6 +107,9 @@ function useTrainer() {
           break;
         case 'activations':
           refs.activations.current = msg;
+          break;
+        case 'embedding':
+          refs.embedding.current = msg;
           break;
         case 'probs':
           setInferProbs(msg.probs);
@@ -291,6 +296,41 @@ function drawLoss(canvas: HTMLCanvasElement | null, loss: number[], acc: number[
   ctx.shadowBlur = 0;
 }
 
+// 10-class categorical palette for the embedding scatter
+const CLASS_COLORS = [
+  '#a78bfa', '#ec4899', '#38d6ff', '#f59e0b', '#4ade80',
+  '#fb923c', '#818cf8', '#f43f5e', '#facc15', '#2dd4bf',
+];
+
+function drawScatter(canvas: HTMLCanvasElement | null, emb: EmbeddingMsg | null): void {
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const cw = Math.max(1, Math.round(canvas.clientWidth * dpr));
+  const ch = Math.max(1, Math.round(canvas.clientHeight * dpr));
+  if (canvas.width !== cw) canvas.width = cw;
+  if (canvas.height !== ch) canvas.height = ch;
+  const W = canvas.width;
+  const H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  if (!emb) return;
+  const { coords, labels } = emb;
+  const n = labels.length;
+  const pad = 16 * dpr;
+  const r = 2.6 * dpr;
+  ctx.globalAlpha = 0.9;
+  for (let i = 0; i < n; i++) {
+    const x = pad + ((coords[i * 2] + 1) / 2) * (W - 2 * pad);
+    const y = pad + ((coords[i * 2 + 1] + 1) / 2) * (H - 2 * pad);
+    ctx.fillStyle = CLASS_COLORS[labels[i]] ?? '#fff';
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
 // ---- output bars ----
 
 const DIGITS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
@@ -330,6 +370,7 @@ export default function Dashboard() {
   const lossRef = useRef<HTMLCanvasElement>(null);
   const inputRef = useRef<HTMLCanvasElement>(null);
   const hiddenRef = useRef<HTMLCanvasElement>(null);
+  const embedRef = useRef<HTMLCanvasElement>(null);
   const [readout, setReadout] = useState<Readout>({
     step: 0,
     loss: NaN,
@@ -354,6 +395,7 @@ export default function Dashboard() {
         drawHidden(hiddenRef.current, act.hidden);
       }
       drawLoss(lossRef.current, refs.lossHist.current, refs.accHist.current);
+      drawScatter(embedRef.current, refs.embedding.current);
       if (++frame % 4 === 0) {
         const m = refs.metrics.current;
         setReadout({
@@ -481,6 +523,21 @@ export default function Dashboard() {
             <ProbBars probs={readout.probs} pred={readout.pred} />
             <span>output → {readout.pred}</span>
           </div>
+        </div>
+      </div>
+
+      <div className="group-label" style={{ marginTop: 24 }}>
+        ▌ embedding · hidden activations → PCA · watch the classes separate
+      </div>
+      <div className="embed-row">
+        <canvas ref={embedRef} className="embed-canvas" width={900} height={300} />
+        <div className="embed-legend">
+          {CLASS_COLORS.map((c, d) => (
+            <span key={d}>
+              <i style={{ background: c }} />
+              {d}
+            </span>
+          ))}
         </div>
       </div>
 
