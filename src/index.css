@@ -1506,8 +1506,15 @@ canvas.px {
 }
 
 .diag-wrap {
-  overflow-x: auto;
+  max-height: 480px;
+  overflow: auto;
   -webkit-overflow-scrolling: touch;
+}
+.diag-wrap table.diag thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
 }
 
 @media (max-width: 640px) {
@@ -1575,10 +1582,41 @@ canvas.px {
     font-size: 12px;
   }
   .specs {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr 1fr;
   }
   .scope-grid {
     grid-template-columns: 1fr;
+  }
+  .statline > span:not(.pill) {
+    display: none;
+  }
+  .dash-top {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+  }
+  .dash-controls {
+    gap: 7px;
+  }
+  .btn {
+    font-size: 12px;
+    padding: 8px 12px;
+  }
+  .draw-row {
+    gap: 14px;
+  }
+  .draw-canvas {
+    width: 150px;
+    height: 150px;
+  }
+  .draw-result {
+    min-width: 0;
+  }
+  .draw-result p {
+    display: none;
+  }
+  .diag-wrap {
+    max-height: 58vh;
   }
   table.diag th:nth-child(3),
   table.diag td:nth-child(3),
