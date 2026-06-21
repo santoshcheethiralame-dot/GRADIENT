@@ -39,7 +39,7 @@ import {
   geluGrad,
   layerNormBackward as layerNormBackwardCpu,
 } from '../nn/nanogpt';
-import { nanoGptGpuForward } from '../nn/nanogpt-gpu';
+import { nanoGptGpuForward, nanoGptGpuBackward } from '../nn/nanogpt-gpu';
 
 const TOL = 1e-3;
 const GRAD_TOL = 2e-2;
@@ -1051,6 +1051,50 @@ async function transformerGpuChecks(): Promise<CheckResult[]> {
     };
     for (const z of [tx, tdy, tg, r.dx, r.dgamma, r.dbeta]) z.destroy();
     out.push(verdict('tfgpu', 'layer norm bwd', `${M}×${N} · dx, dγ, dβ`, m, ms));
+  }
+
+  // full backward — every parameter gradient, GPU vs CPU
+  {
+    const tok = new CharTokenizer('the quick brown fox.');
+    const cfg = { vocab: tok.vocab, dEmbed: 16, dFF: 32, blockSize: 8 };
+    const model = new NanoGpt(cfg, 4, 0.4);
+    const T = cfg.blockSize;
+    const full = tok.encode('the quick b');
+    const ids = full.slice(0, T);
+    const targets = full.slice(1, T + 1);
+    model.zeroGrad();
+    model.backward(model.forwardCache(ids), targets);
+    const t0 = performance.now();
+    const g = await nanoGptGpuBackward(device, model, ids, targets);
+    const ms = performance.now() - t0;
+    const cmp = (a: Float32Array, b: Float32Array): number => {
+      let mr = 0;
+      for (let i = 0; i < a.length; i++) {
+        const re = Math.abs(a[i] - b[i]) / Math.max(1e-3, Math.abs(b[i]));
+        if (re > mr) mr = re;
+      }
+      return mr;
+    };
+    const per: Record<string, number> = {};
+    let maxRel = 0;
+    for (const p of model.params()) {
+      const gg = g[p.name];
+      if (!gg) continue;
+      const r = cmp(gg, p.g);
+      per[p.name] = Number(r.toFixed(4));
+      if (r > maxRel) maxRel = r;
+    }
+    console.info('[nano-GPT] GPU backward rel err per param:', per);
+    out.push(
+      verdict(
+        'tfgpu',
+        'backward (GPU vs CPU)',
+        `${model.params().length} param grads · full block`,
+        { maxAbsErr: maxRel, maxRelErr: maxRel },
+        ms,
+        2e-2,
+      ),
+    );
   }
 
   return out;
