@@ -7,6 +7,8 @@ import {
   biasBackward,
   softmax,
   softmaxCeBackward,
+  crossEntropy,
+  adamStep,
   layerNorm,
   layerNormBackward,
   causalSoftmax,
@@ -16,7 +18,7 @@ import {
   addTensors,
   createU32Buffer,
 } from '../gpu/ops';
-import type { NanoGpt } from './nanogpt';
+import { NanoGpt } from './nanogpt';
 
 export async function nanoGptGpuForward(
   device: GPUDevice,
@@ -271,4 +273,254 @@ export async function nanoGptGpuBackward(
     'lnf.b': dlnfbA,
     head: dHeadA,
   };
+}
+
+const BLOCK_PARAMS = [
+  'ln1g',
+  'ln1b',
+  'Wq',
+  'Wk',
+  'Wv',
+  'Wo',
+  'ln2g',
+  'ln2b',
+  'Wff1',
+  'bff1',
+  'Wff2',
+  'bff2',
+  'lnfg',
+  'lnfb',
+  'head',
+] as const;
+
+const B1 = 0.9;
+const B2 = 0.999;
+const EPS = 1e-8;
+
+// A nano-GPT whose transformer-block parameters live on the GPU as persistent
+// tensors (with GPU Adam moments). One step() runs forward + backward + Adam
+// entirely on the GPU; the embedding table is a lookup, so it is gathered/
+// updated CPU-side from the read-back input gradient. Construct from a CPU
+// NanoGpt (copies its weights); syncTo() copies the trained weights back for
+// generation/eval.
+export class GpuNanoGpt {
+  readonly device: GPUDevice;
+  readonly cfg: NanoGpt['cfg'];
+  private readonly p: Record<string, GpuTensor> = {};
+  private readonly m: Record<string, GpuTensor> = {};
+  private readonly v: Record<string, GpuTensor> = {};
+  private readonly tokEmb: Float32Array;
+  private readonly posEmb: Float32Array;
+  private readonly mTok: Float32Array;
+  private readonly vTok: Float32Array;
+  private readonly mPos: Float32Array;
+  private readonly vPos: Float32Array;
+  private adamT = 0;
+
+  constructor(device: GPUDevice, model: NanoGpt) {
+    this.device = device;
+    this.cfg = model.cfg;
+    const { dEmbed: dE, dFF, vocab, blockSize } = model.cfg;
+    const shape: Record<string, number[]> = {
+      ln1g: [dE],
+      ln1b: [dE],
+      Wq: [dE, dE],
+      Wk: [dE, dE],
+      Wv: [dE, dE],
+      Wo: [dE, dE],
+      ln2g: [dE],
+      ln2b: [dE],
+      Wff1: [dE, dFF],
+      bff1: [dFF],
+      Wff2: [dFF, dE],
+      bff2: [dE],
+      lnfg: [dE],
+      lnfb: [dE],
+      head: [dE, vocab],
+    };
+    for (const name of BLOCK_PARAMS) {
+      const src = (model as unknown as Record<string, Float32Array>)[name];
+      this.p[name] = GpuTensor.fromArray(device, src.slice(), shape[name]);
+      this.m[name] = GpuTensor.zeros(device, shape[name]);
+      this.v[name] = GpuTensor.zeros(device, shape[name]);
+    }
+    this.tokEmb = model.tokEmb.slice();
+    this.posEmb = model.posEmb.slice();
+    this.mTok = new Float32Array(vocab * dE);
+    this.vTok = new Float32Array(vocab * dE);
+    this.mPos = new Float32Array(blockSize * dE);
+    this.vPos = new Float32Array(blockSize * dE);
+  }
+
+  /** One training step on a (ids, targets) window. Returns the mean loss. */
+  async step(ids: number[], targets: number[], lr: number): Promise<number> {
+    const device = this.device;
+    const { dEmbed: dE } = this.cfg;
+    const t = ids.length;
+    const scale = 1 / Math.sqrt(dE);
+    const P = this.p;
+    const scratch: GpuTensor[] = [];
+    const k = <T extends GpuTensor>(g: T): T => {
+      scratch.push(g);
+      return g;
+    };
+
+    const xData = new Float32Array(t * dE);
+    for (let i = 0; i < t; i++) {
+      const te = ids[i] * dE;
+      const pe = i * dE;
+      for (let c = 0; c < dE; c++) xData[i * dE + c] = this.tokEmb[te + c] + this.posEmb[pe + c];
+    }
+    const x = k(GpuTensor.fromArray(device, xData, [t, dE]));
+
+    // forward
+    const h = k(layerNorm(device, x, P.ln1g, P.ln1b));
+    const Q = k(matmul(device, h, P.Wq));
+    const K = k(matmul(device, h, P.Wk));
+    const V = k(matmul(device, h, P.Wv));
+    const scores = k(matmulABT(device, Q, K));
+    const attn = k(causalSoftmax(device, scores, scale));
+    const ctx = k(matmul(device, attn, V));
+    const o = k(matmul(device, ctx, P.Wo));
+    const xa = k(addTensors(device, x, o));
+    const h2 = k(layerNorm(device, xa, P.ln2g, P.ln2b));
+    const f = k(matmul(device, h2, P.Wff1));
+    biasAdd(device, f, P.bff1);
+    const fg = k(gelu(device, f));
+    const f2 = k(matmul(device, fg, P.Wff2));
+    biasAdd(device, f2, P.bff2);
+    const xb = k(addTensors(device, xa, f2));
+    const xf = k(layerNorm(device, xb, P.lnfg, P.lnfb));
+    const logits = k(matmul(device, xf, P.head));
+
+    // backward
+    const probs = k(softmax(device, logits));
+    const tb = createU32Buffer(device, Uint32Array.from(targets), 'targets');
+    const dlogits = k(softmaxCeBackward(device, probs, tb));
+    const dHead = k(matmulATB(device, xf, dlogits));
+    const dxf = k(matmulABT(device, dlogits, P.head));
+    const lnf = layerNormBackward(device, xb, dxf, P.lnfg);
+    k(lnf.dx);
+    k(lnf.dgamma);
+    k(lnf.dbeta);
+    const df2 = lnf.dx;
+    const dWff2 = k(matmulATB(device, fg, df2));
+    const dbff2 = k(biasBackward(device, df2));
+    const dfg = k(matmulABT(device, df2, P.Wff2));
+    const df = k(geluBackward(device, dfg, f));
+    const dWff1 = k(matmulATB(device, h2, df));
+    const dbff1 = k(biasBackward(device, df));
+    const dh2 = k(matmulABT(device, df, P.Wff1));
+    const ln2 = layerNormBackward(device, xa, dh2, P.ln2g);
+    k(ln2.dx);
+    k(ln2.dgamma);
+    k(ln2.dbeta);
+    const dxa = k(addTensors(device, df2, ln2.dx));
+    const dWo = k(matmulATB(device, ctx, dxa));
+    const dctx = k(matmulABT(device, dxa, P.Wo));
+    const dattn = k(matmulABT(device, dctx, V));
+    const dV = k(matmulATB(device, attn, dctx));
+    const dscores = k(causalSoftmaxBackward(device, attn, dattn, scale));
+    const dQ = k(matmul(device, dscores, K));
+    const dK = k(matmulATB(device, dscores, Q));
+    const dWq = k(matmulATB(device, h, dQ));
+    const dWk = k(matmulATB(device, h, dK));
+    const dWv = k(matmulATB(device, h, dV));
+    const dhq = k(matmulABT(device, dQ, P.Wq));
+    const dhk = k(matmulABT(device, dK, P.Wk));
+    const dhv = k(matmulABT(device, dV, P.Wv));
+    const dh = k(addTensors(device, k(addTensors(device, dhq, dhk)), dhv));
+    const ln1 = layerNormBackward(device, x, dh, P.ln1g);
+    k(ln1.dx);
+    k(ln1.dgamma);
+    k(ln1.dbeta);
+    const dx = k(addTensors(device, dxa, ln1.dx));
+
+    // Adam — block params on the GPU
+    this.adamT++;
+    const bc1 = 1 - Math.pow(B1, this.adamT);
+    const bc2 = 1 - Math.pow(B2, this.adamT);
+    const cfg = { lr, beta1: B1, beta2: B2, eps: EPS, bc1, bc2 };
+    const grad: Record<string, GpuTensor> = {
+      head: dHead,
+      Wq: dWq,
+      Wk: dWk,
+      Wv: dWv,
+      Wo: dWo,
+      Wff1: dWff1,
+      bff1: dbff1,
+      Wff2: dWff2,
+      bff2: dbff2,
+      ln1g: ln1.dgamma,
+      ln1b: ln1.dbeta,
+      ln2g: ln2.dgamma,
+      ln2b: ln2.dbeta,
+      lnfg: lnf.dgamma,
+      lnfb: lnf.dbeta,
+    };
+    for (const name of BLOCK_PARAMS) {
+      adamStep(device, this.p[name], grad[name], this.m[name], this.v[name], cfg);
+    }
+
+    // loss + input gradient (the two read-backs this step needs)
+    const lossesT = k(crossEntropy(device, probs, tb));
+    const [lossArr, dxArr] = await Promise.all([lossesT.toArray(), dx.toArray()]);
+    let loss = 0;
+    for (let i = 0; i < t; i++) loss += lossArr[i];
+    loss /= t;
+
+    // Adam — embedding table on the CPU (gathered from dx)
+    const { vocab, blockSize } = this.cfg;
+    const dTok = new Float32Array(vocab * dE);
+    const dPos = new Float32Array(blockSize * dE);
+    for (let i = 0; i < t; i++) {
+      const te = ids[i] * dE;
+      const pe = i * dE;
+      for (let c = 0; c < dE; c++) {
+        const gg = dxArr[i * dE + c];
+        dTok[te + c] += gg;
+        dPos[pe + c] += gg;
+      }
+    }
+    adamCpu(this.tokEmb, dTok, this.mTok, this.vTok, lr, bc1, bc2);
+    adamCpu(this.posEmb, dPos, this.mPos, this.vPos, lr, bc1, bc2);
+
+    for (const g of scratch) g.destroy();
+    tb.destroy();
+    return loss;
+  }
+
+  /** Copy the trained weights back into a CPU NanoGpt for generation/eval. */
+  async syncTo(model: NanoGpt): Promise<void> {
+    model.tokEmb.set(this.tokEmb);
+    model.posEmb.set(this.posEmb);
+    const arrs = await Promise.all(BLOCK_PARAMS.map((name) => this.p[name].toArray()));
+    BLOCK_PARAMS.forEach((name, i) => {
+      (model as unknown as Record<string, Float32Array>)[name].set(arrs[i]);
+    });
+  }
+
+  destroy(): void {
+    for (const name of BLOCK_PARAMS) {
+      this.p[name].destroy();
+      this.m[name].destroy();
+      this.v[name].destroy();
+    }
+  }
+}
+
+function adamCpu(
+  w: Float32Array,
+  g: Float32Array,
+  m: Float32Array,
+  v: Float32Array,
+  lr: number,
+  bc1: number,
+  bc2: number,
+): void {
+  for (let i = 0; i < w.length; i++) {
+    m[i] = B1 * m[i] + (1 - B1) * g[i];
+    v[i] = B2 * v[i] + (1 - B2) * g[i] * g[i];
+    w[i] -= (lr * (m[i] / bc1)) / (Math.sqrt(v[i] / bc2) + EPS);
+  }
 }
