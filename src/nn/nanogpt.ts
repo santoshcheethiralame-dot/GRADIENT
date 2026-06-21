@@ -149,7 +149,7 @@ function addInto(dst: Float32Array, src: Float32Array): void {
   for (let i = 0; i < dst.length; i++) dst[i] += src[i];
 }
 
-function geluGrad(x: number): number {
+export function geluGrad(x: number): number {
   const c = Math.sqrt(2 / Math.PI);
   const u = c * (x + 0.044715 * x * x * x);
   const t = Math.tanh(u);
@@ -157,7 +157,7 @@ function geluGrad(x: number): number {
   return 0.5 * (1 + t) + 0.5 * x * (1 - t * t) * du;
 }
 
-function layerNormBackward(
+export function layerNormBackward(
   dy: Float32Array,
   xIn: Float32Array,
   gamma: Float32Array,

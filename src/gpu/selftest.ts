@@ -18,6 +18,10 @@ import {
   layerNorm,
   causalSoftmax,
   gelu,
+  geluBackward,
+  mulTensors,
+  causalSoftmaxBackward,
+  layerNormBackward,
   type MatmulVariant,
 } from './ops';
 import * as ref from '../nn/reference';
@@ -32,6 +36,8 @@ import {
   softmaxRow,
   defaultConfig,
   NANO_CORPUS,
+  geluGrad,
+  layerNormBackward as layerNormBackwardCpu,
 } from '../nn/nanogpt';
 import { nanoGptGpuForward } from '../nn/nanogpt-gpu';
 
@@ -936,6 +942,115 @@ async function transformerGpuChecks(): Promise<CheckResult[]> {
     out.push(
       verdict('tfgpu', 'forward (GPU vs CPU)', `${T}×${cfg.vocab} · full block on GPU`, m, ms, TOL * 3),
     );
+  }
+
+  // ---- backward kernels (GPU vs CPU oracle) ----
+
+  // GELU backward
+  {
+    const M = 24;
+    const N = 24;
+    const rng = mulberry32(301);
+    const dO = randRange(M * N, 1, rng);
+    const f = randRange(M * N, 4, rng);
+    const tdO = GpuTensor.fromArray(device, dO, [M, N]);
+    const tf = GpuTensor.fromArray(device, f, [M, N]);
+    const t0 = performance.now();
+    const ty = geluBackward(device, tdO, tf);
+    const got = await ty.toArray();
+    const ms = performance.now() - t0;
+    const exp = new Float32Array(M * N);
+    for (let i = 0; i < exp.length; i++) exp[i] = dO[i] * geluGrad(f[i]);
+    const m = ref.compareArrays(got, exp);
+    for (const z of [tdO, tf, ty]) z.destroy();
+    out.push(verdict('tfgpu', "GELU'", `${M}×${N} · dOut ⊙ gelu'(pre)`, m, ms));
+  }
+
+  // elementwise multiply
+  {
+    const n = 512;
+    const rng = mulberry32(302);
+    const a = randRange(n, 2, rng);
+    const b = randRange(n, 2, rng);
+    const ta = GpuTensor.fromArray(device, a, [n]);
+    const tb = GpuTensor.fromArray(device, b, [n]);
+    const t0 = performance.now();
+    const ty = mulTensors(device, ta, tb);
+    const got = await ty.toArray();
+    const ms = performance.now() - t0;
+    const exp = new Float32Array(n);
+    for (let i = 0; i < n; i++) exp[i] = a[i] * b[i];
+    const m = ref.compareArrays(got, exp);
+    for (const z of [ta, tb, ty]) z.destroy();
+    out.push(verdict('tfgpu', 'elementwise ⊙', `${n} · a ⊙ b`, m, ms));
+  }
+
+  // causal softmax backward
+  {
+    const T = 16;
+    const rng = mulberry32(303);
+    const scores = randRange(T * T, 3, rng);
+    const scale = 1 / Math.sqrt(8);
+    const attn = new Float32Array(T * T);
+    for (let i = 0; i < T; i++) {
+      let mx = -Infinity;
+      for (let j = 0; j <= i; j++) mx = Math.max(mx, scores[i * T + j] * scale);
+      let s = 0;
+      for (let j = 0; j <= i; j++) {
+        const e = Math.exp(scores[i * T + j] * scale - mx);
+        attn[i * T + j] = e;
+        s += e;
+      }
+      for (let j = 0; j <= i; j++) attn[i * T + j] /= s;
+    }
+    const dattn = randRange(T * T, 1, rng);
+    const tattn = GpuTensor.fromArray(device, attn, [T, T]);
+    const tdat = GpuTensor.fromArray(device, dattn, [T, T]);
+    const t0 = performance.now();
+    const ty = causalSoftmaxBackward(device, tattn, tdat, scale);
+    const got = await ty.toArray();
+    const ms = performance.now() - t0;
+    const exp = new Float32Array(T * T);
+    for (let i = 0; i < T; i++) {
+      let sumd = 0;
+      for (let j = 0; j <= i; j++) sumd += attn[i * T + j] * dattn[i * T + j];
+      for (let j = 0; j <= i; j++)
+        exp[i * T + j] = scale * attn[i * T + j] * (dattn[i * T + j] - sumd);
+    }
+    const m = ref.compareArrays(got, exp);
+    for (const z of [tattn, tdat, ty]) z.destroy();
+    out.push(verdict('tfgpu', 'causal softmax bwd', `${T}×${T} · masked softmax Jacobian`, m, ms));
+  }
+
+  // layer norm backward (dx, dγ, dβ)
+  {
+    const M = 12;
+    const N = 20;
+    const rng = mulberry32(304);
+    const x = randRange(M * N, 3, rng);
+    const dy = randRange(M * N, 1, rng);
+    const g = randRange(N, 1, rng);
+    const tx = GpuTensor.fromArray(device, x, [M, N]);
+    const tdy = GpuTensor.fromArray(device, dy, [M, N]);
+    const tg = GpuTensor.fromArray(device, g, [N]);
+    const t0 = performance.now();
+    const r = layerNormBackward(device, tx, tdy, tg);
+    const [gotDx, gotDg, gotDb] = await Promise.all([
+      r.dx.toArray(),
+      r.dgamma.toArray(),
+      r.dbeta.toArray(),
+    ]);
+    const ms = performance.now() - t0;
+    const cpu = layerNormBackwardCpu(dy, x, g, M, N);
+    const mdx = ref.compareArrays(gotDx, cpu.dx);
+    const mdg = ref.compareArrays(gotDg, cpu.dgamma);
+    const mdb = ref.compareArrays(gotDb, cpu.dbeta);
+    const m: ref.ErrorMetrics = {
+      maxAbsErr: Math.max(mdx.maxAbsErr, mdg.maxAbsErr, mdb.maxAbsErr),
+      maxRelErr: Math.max(mdx.maxRelErr, mdg.maxRelErr, mdb.maxRelErr),
+    };
+    for (const z of [tx, tdy, tg, r.dx, r.dgamma, r.dbeta]) z.destroy();
+    out.push(verdict('tfgpu', 'layer norm bwd', `${M}×${N} · dx, dγ, dβ`, m, ms));
   }
 
   return out;

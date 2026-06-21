@@ -19,6 +19,10 @@ import layerNormSrc from './shaders/layer_norm.wgsl?raw';
 import causalSoftmaxSrc from './shaders/causal_softmax.wgsl?raw';
 import geluSrc from './shaders/gelu.wgsl?raw';
 import addSrc from './shaders/add.wgsl?raw';
+import geluBackwardSrc from './shaders/gelu_backward.wgsl?raw';
+import mulSrc from './shaders/mul.wgsl?raw';
+import causalSoftmaxBackwardSrc from './shaders/causal_softmax_backward.wgsl?raw';
+import layerNormBackwardSrc from './shaders/layer_norm_backward.wgsl?raw';
 
 const WORKGROUP = 16;
 const WG1D = 64;
@@ -565,4 +569,95 @@ export function causalSoftmax(
     'causal_softmax',
   );
   return o;
+}
+
+// =====================================================================
+// TRANSFORMER BACKWARD
+// =====================================================================
+
+/** dX = dOut ⊙ gelu'(pre), where `pre` is the pre-GELU activation. */
+export function geluBackward(
+  device: GPUDevice,
+  dOut: GpuTensor,
+  pre: GpuTensor,
+  out?: GpuTensor,
+): GpuTensor {
+  return elementwise2(device, 'gelu_backward', geluBackwardSrc, dOut, pre, out);
+}
+
+/** Elementwise product: out = a ⊙ b. */
+export function mulTensors(
+  device: GPUDevice,
+  a: GpuTensor,
+  b: GpuTensor,
+  out?: GpuTensor,
+): GpuTensor {
+  return elementwise2(device, 'mul', mulSrc, a, b, out);
+}
+
+/** Backward of causalSoftmax: from the attention weights and dAttn, returns
+ *  dScores (gradient w.r.t. the raw, pre-scale scores). */
+export function causalSoftmaxBackward(
+  device: GPUDevice,
+  attn: GpuTensor,
+  dattn: GpuTensor,
+  scale: number,
+  out?: GpuTensor,
+): GpuTensor {
+  if (attn.shape.length !== 2 || attn.shape[0] !== attn.shape[1]) {
+    throw new Error('causalSoftmaxBackward: attn must be square [T×T]');
+  }
+  const T = attn.shape[0];
+  const o = out ?? GpuTensor.zeros(device, attn.shape, { label: 'causal_softmax_backward.out' });
+  const u = makeUniform(device, 16, (dv) => {
+    dv.setUint32(0, T, true);
+    dv.setFloat32(4, scale, true);
+  });
+  dispatch1D(
+    device,
+    getComputePipeline(device, 'causal_softmax_backward', causalSoftmaxBackwardSrc),
+    [
+      { binding: 0, resource: { buffer: attn.buffer } },
+      { binding: 1, resource: { buffer: dattn.buffer } },
+      { binding: 2, resource: { buffer: o.buffer } },
+      { binding: 3, resource: { buffer: u } },
+    ],
+    T,
+    'causal_softmax_backward',
+  );
+  return o;
+}
+
+/** Backward of layerNorm. Given the LN input x, the upstream grad dy, and γ,
+ *  returns dx and the parameter grads dγ, dβ. */
+export function layerNormBackward(
+  device: GPUDevice,
+  x: GpuTensor,
+  dy: GpuTensor,
+  gamma: GpuTensor,
+): { dx: GpuTensor; dgamma: GpuTensor; dbeta: GpuTensor } {
+  if (x.shape.length !== 2) throw new Error('layerNormBackward: x must be 2-D');
+  const [M, N] = x.shape;
+  const dx = GpuTensor.zeros(device, x.shape, { label: 'ln_bwd.dx' });
+  const xhat = GpuTensor.zeros(device, x.shape, { label: 'ln_bwd.xhat' });
+  dispatch1D(
+    device,
+    getComputePipeline(device, 'layer_norm_backward', layerNormBackwardSrc),
+    [
+      { binding: 0, resource: { buffer: x.buffer } },
+      { binding: 1, resource: { buffer: dy.buffer } },
+      { binding: 2, resource: { buffer: gamma.buffer } },
+      { binding: 3, resource: { buffer: dx.buffer } },
+      { binding: 4, resource: { buffer: xhat.buffer } },
+      { binding: 5, resource: { buffer: metaBuffer(device, [M, N]) } },
+    ],
+    M,
+    'layer_norm_backward',
+  );
+  const dbeta = biasBackward(device, dy); // Σ_rows dy
+  const tmp = mulTensors(device, dy, xhat); // dy ⊙ x̂
+  const dgamma = biasBackward(device, tmp); // Σ_rows dy ⊙ x̂
+  tmp.destroy();
+  xhat.destroy();
+  return { dx, dgamma, dbeta };
 }

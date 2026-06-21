@@ -35,7 +35,7 @@ const GROUP_LABELS: Record<CheckGroup, string> = {
   data: 'data pipeline',
   gradcheck: 'gradient check · numerical vs. analytic',
   nanogpt: 'nano-GPT · char transformer (forward · backprop · train)',
-  tfgpu: 'nano-GPT · GPU forward (kernels + full block vs. f64 CPU)',
+  tfgpu: 'nano-GPT · GPU kernels (forward + backward vs. f64 CPU)',
 };
 const GROUP_ORDER: CheckGroup[] = [
   'matmul',
