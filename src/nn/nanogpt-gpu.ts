@@ -86,12 +86,6 @@ export async function nanoGptGpuForward(
   return result;
 }
 
-// The full backward pass on the GPU. Recomputes the forward (retaining every
-// intermediate), backprops with the same math as NanoGpt.backward, and returns
-// each parameter gradient as a Float32Array keyed by the params() name — so it
-// can be diffed directly against the CPU backward. The embedding lookup and its
-// scatter-add gradient are done on the CPU (a tiny gather); everything else runs
-// on the GPU and reuses matmul / matmulATB / matmulABT plus the new kernels.
 export async function nanoGptGpuBackward(
   device: GPUDevice,
   model: NanoGpt,
@@ -133,7 +127,6 @@ export async function nanoGptGpuBackward(
   const lnfb = up(model.lnfb, [dE]);
   const head = up(model.head, [dE, vocab]);
 
-  // ---- forward (retain intermediates) ----
   const h = keep(layerNorm(device, x, ln1g, ln1b));
   const Q = keep(matmul(device, h, Wq));
   const K = keep(matmul(device, h, Wk));
@@ -153,10 +146,9 @@ export async function nanoGptGpuBackward(
   const xf = keep(layerNorm(device, xb, lnfg, lnfb));
   const logits = keep(matmul(device, xf, head));
 
-  // ---- backward ----
   const probs = keep(softmax(device, logits));
   const targetBuf = createU32Buffer(device, Uint32Array.from(targets), 'targets');
-  const dlogits = keep(softmaxCeBackward(device, probs, targetBuf)); // (P − onehot)/t
+  const dlogits = keep(softmaxCeBackward(device, probs, targetBuf));
 
   const dHead = keep(matmulATB(device, xf, dlogits));
   const dxf = keep(matmulABT(device, dlogits, head));
@@ -165,7 +157,7 @@ export async function nanoGptGpuBackward(
   keep(lnf.dx);
   keep(lnf.dgamma);
   keep(lnf.dbeta);
-  const df2 = lnf.dx; // residual: xb = xa + f2
+  const df2 = lnf.dx;
 
   const dWff2 = keep(matmulATB(device, fg, df2));
   const dbff2 = keep(biasBackward(device, df2));
@@ -178,7 +170,7 @@ export async function nanoGptGpuBackward(
   keep(ln2.dx);
   keep(ln2.dgamma);
   keep(ln2.dbeta);
-  const dxa = keep(addTensors(device, df2, ln2.dx)); // dxb + dxa_mlp
+  const dxa = keep(addTensors(device, df2, ln2.dx));
 
   const dWo = keep(matmulATB(device, ctx, dxa));
   const dctx = keep(matmulABT(device, dxa, Wo));
@@ -238,7 +230,6 @@ export async function nanoGptGpuBackward(
     lnf.dbeta.toArray(),
   ]);
 
-  // embedding scatter-add (CPU): a token id may repeat across positions
   const dTokEmb = new Float32Array(vocab * dE);
   const dPosEmb = new Float32Array(model.cfg.blockSize * dE);
   for (let i = 0; i < t; i++) {
@@ -297,12 +288,6 @@ const B1 = 0.9;
 const B2 = 0.999;
 const EPS = 1e-8;
 
-// A nano-GPT whose transformer-block parameters live on the GPU as persistent
-// tensors (with GPU Adam moments). One step() runs forward + backward + Adam
-// entirely on the GPU; the embedding table is a lookup, so it is gathered/
-// updated CPU-side from the read-back input gradient. Construct from a CPU
-// NanoGpt (copies its weights); syncTo() copies the trained weights back for
-// generation/eval.
 export class GpuNanoGpt {
   readonly device: GPUDevice;
   readonly cfg: NanoGpt['cfg'];
@@ -352,7 +337,6 @@ export class GpuNanoGpt {
     this.vPos = new Float32Array(blockSize * dE);
   }
 
-  /** One training step on a (ids, targets) window. Returns the mean loss. */
   async step(ids: number[], targets: number[], lr: number): Promise<number> {
     const device = this.device;
     const { dEmbed: dE } = this.cfg;
@@ -373,7 +357,6 @@ export class GpuNanoGpt {
     }
     const x = k(GpuTensor.fromArray(device, xData, [t, dE]));
 
-    // forward
     const h = k(layerNorm(device, x, P.ln1g, P.ln1b));
     const Q = k(matmul(device, h, P.Wq));
     const K = k(matmul(device, h, P.Wk));
@@ -393,7 +376,6 @@ export class GpuNanoGpt {
     const xf = k(layerNorm(device, xb, P.lnfg, P.lnfb));
     const logits = k(matmul(device, xf, P.head));
 
-    // backward
     const probs = k(softmax(device, logits));
     const tb = createU32Buffer(device, Uint32Array.from(targets), 'targets');
     const dlogits = k(softmaxCeBackward(device, probs, tb));
@@ -436,7 +418,6 @@ export class GpuNanoGpt {
     k(ln1.dbeta);
     const dx = k(addTensors(device, dxa, ln1.dx));
 
-    // Adam — block params on the GPU
     this.adamT++;
     const bc1 = 1 - Math.pow(B1, this.adamT);
     const bc2 = 1 - Math.pow(B2, this.adamT);
@@ -462,14 +443,12 @@ export class GpuNanoGpt {
       adamStep(device, this.p[name], grad[name], this.m[name], this.v[name], cfg);
     }
 
-    // loss + input gradient (the two read-backs this step needs)
     const lossesT = k(crossEntropy(device, probs, tb));
     const [lossArr, dxArr] = await Promise.all([lossesT.toArray(), dx.toArray()]);
     let loss = 0;
     for (let i = 0; i < t; i++) loss += lossArr[i];
     loss /= t;
 
-    // Adam — embedding table on the CPU (gathered from dx)
     const { vocab, blockSize } = this.cfg;
     const dTok = new Float32Array(vocab * dE);
     const dPos = new Float32Array(blockSize * dE);
@@ -490,7 +469,6 @@ export class GpuNanoGpt {
     return loss;
   }
 
-  /** Copy the trained weights back into a CPU NanoGpt for generation/eval. */
   async syncTo(model: NanoGpt): Promise<void> {
     model.tokEmb.set(this.tokEmb);
     model.posEmb.set(this.posEmb);
@@ -498,6 +476,34 @@ export class GpuNanoGpt {
     BLOCK_PARAMS.forEach((name, i) => {
       (model as unknown as Record<string, Float32Array>)[name].set(arrs[i]);
     });
+  }
+
+  async attention(ids: number[]): Promise<Float32Array> {
+    const device = this.device;
+    const { dEmbed: dE } = this.cfg;
+    const t = ids.length;
+    const scale = 1 / Math.sqrt(dE);
+    const P = this.p;
+    const scratch: GpuTensor[] = [];
+    const k = <T extends GpuTensor>(g: T): T => {
+      scratch.push(g);
+      return g;
+    };
+    const xData = new Float32Array(t * dE);
+    for (let i = 0; i < t; i++) {
+      const te = ids[i] * dE;
+      const pe = i * dE;
+      for (let c = 0; c < dE; c++) xData[i * dE + c] = this.tokEmb[te + c] + this.posEmb[pe + c];
+    }
+    const x = k(GpuTensor.fromArray(device, xData, [t, dE]));
+    const h = k(layerNorm(device, x, P.ln1g, P.ln1b));
+    const Q = k(matmul(device, h, P.Wq));
+    const K = k(matmul(device, h, P.Wk));
+    const scores = k(matmulABT(device, Q, K));
+    const attn = k(causalSoftmax(device, scores, scale));
+    const arr = await attn.toArray();
+    for (const g of scratch) g.destroy();
+    return arr;
   }
 
   destroy(): void {

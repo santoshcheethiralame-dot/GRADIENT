@@ -571,11 +571,6 @@ export function causalSoftmax(
   return o;
 }
 
-// =====================================================================
-// TRANSFORMER BACKWARD
-// =====================================================================
-
-/** dX = dOut ⊙ gelu'(pre), where `pre` is the pre-GELU activation. */
 export function geluBackward(
   device: GPUDevice,
   dOut: GpuTensor,
@@ -585,7 +580,6 @@ export function geluBackward(
   return elementwise2(device, 'gelu_backward', geluBackwardSrc, dOut, pre, out);
 }
 
-/** Elementwise product: out = a ⊙ b. */
 export function mulTensors(
   device: GPUDevice,
   a: GpuTensor,
@@ -595,8 +589,6 @@ export function mulTensors(
   return elementwise2(device, 'mul', mulSrc, a, b, out);
 }
 
-/** Backward of causalSoftmax: from the attention weights and dAttn, returns
- *  dScores (gradient w.r.t. the raw, pre-scale scores). */
 export function causalSoftmaxBackward(
   device: GPUDevice,
   attn: GpuTensor,
@@ -628,8 +620,6 @@ export function causalSoftmaxBackward(
   return o;
 }
 
-/** Backward of layerNorm. Given the LN input x, the upstream grad dy, and γ,
- *  returns dx and the parameter grads dγ, dβ. */
 export function layerNormBackward(
   device: GPUDevice,
   x: GpuTensor,
@@ -654,9 +644,9 @@ export function layerNormBackward(
     M,
     'layer_norm_backward',
   );
-  const dbeta = biasBackward(device, dy); // Σ_rows dy
-  const tmp = mulTensors(device, dy, xhat); // dy ⊙ x̂
-  const dgamma = biasBackward(device, tmp); // Σ_rows dy ⊙ x̂
+  const dbeta = biasBackward(device, dy);
+  const tmp = mulTensors(device, dy, xhat);
+  const dgamma = biasBackward(device, tmp);
   tmp.destroy();
   xhat.destroy();
   return { dx, dgamma, dbeta };

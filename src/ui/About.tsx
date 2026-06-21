@@ -4,7 +4,7 @@ const REPO = 'https://github.com/santoshcheethiralame-dot/GRADIENT';
 const PIPELINE = ['GPUDevice', 'GpuTensor', 'tiled matmul', 'forward', 'backprop', 'Adam', 'MNIST'];
 
 const STATS = [
-  { v: '44/44', l: 'self-test checks pass' },
+  { v: '49/49', l: 'self-test checks pass' },
   { v: '~97%', l: 'MNIST test accuracy' },
   { v: '2', l: 'models · MLP + transformer' },
   { v: '0', l: 'servers · 100% in-browser' },
@@ -156,7 +156,7 @@ export function About({ onEnter }: { onEnter: () => void }) {
             — it's measured, in your browser.
           </p>
           <div className="proof-big">
-            <b>44 / 44</b>
+            <b>49 / 49</b>
             <span>kernel + gradient checks · rel. err &lt; 1e-3</span>
           </div>
         </div>

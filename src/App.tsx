@@ -9,6 +9,7 @@ import {
 import Dashboard from './ui/Dashboard';
 import CpuTrainer from './ui/CpuTrainer';
 import { NanoGptLab } from './ui/NanoGptLab';
+import { ShakespeareLab } from './ui/ShakespeareLab';
 import { About } from './ui/About';
 import { runProfile, type ProfileRow } from './gpu/profile';
 
@@ -162,6 +163,8 @@ export default function App() {
           <NanoGptLab />
         )}
 
+        {phase.kind === 'ready' && <ShakespeareLab />}
+
         {(phase.kind === 'cpu' || phase.kind === 'unsupported') && (
           <CpuTrainer forced={phase.kind === 'cpu'} />
         )}
@@ -180,8 +183,8 @@ export default function App() {
 
           <p className="foot">
             The full WebGPU stack — device → tensors → tiled matmul → forward → gradient-checked
-            backprop → SGD/Adam → MNIST — plus nano-GPT, a char transformer that trains and writes.
-            44/44 self-test on every load.
+            backprop → SGD/Adam → MNIST — plus nano-GPT, a char transformer trained on the GPU.
+            49/49 self-test on every load.
           </p>
         </>
       )}

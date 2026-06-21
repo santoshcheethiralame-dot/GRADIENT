@@ -984,6 +984,31 @@ canvas.px {
   line-height: 1.5;
   color: var(--muted);
 }
+.attn-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.attn-label {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.attn-canvas {
+  width: 100%;
+  max-width: 300px;
+  aspect-ratio: 1 / 1;
+  border: var(--bw) solid var(--black);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  background: var(--screen);
+}
+.shakespeare-out {
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
 .nlab-blurb {
   margin: 0;
   font-family: var(--mono);

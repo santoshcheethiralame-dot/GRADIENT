@@ -944,9 +944,6 @@ async function transformerGpuChecks(): Promise<CheckResult[]> {
     );
   }
 
-  // ---- backward kernels (GPU vs CPU oracle) ----
-
-  // GELU backward
   {
     const M = 24;
     const N = 24;
@@ -966,7 +963,6 @@ async function transformerGpuChecks(): Promise<CheckResult[]> {
     out.push(verdict('tfgpu', "GELU'", `${M}×${N} · dOut ⊙ gelu'(pre)`, m, ms));
   }
 
-  // elementwise multiply
   {
     const n = 512;
     const rng = mulberry32(302);
@@ -985,7 +981,6 @@ async function transformerGpuChecks(): Promise<CheckResult[]> {
     out.push(verdict('tfgpu', 'elementwise ⊙', `${n} · a ⊙ b`, m, ms));
   }
 
-  // causal softmax backward
   {
     const T = 16;
     const rng = mulberry32(303);
@@ -1022,7 +1017,6 @@ async function transformerGpuChecks(): Promise<CheckResult[]> {
     out.push(verdict('tfgpu', 'causal softmax bwd', `${T}×${T} · masked softmax Jacobian`, m, ms));
   }
 
-  // layer norm backward (dx, dγ, dβ)
   {
     const M = 12;
     const N = 20;
@@ -1053,7 +1047,6 @@ async function transformerGpuChecks(): Promise<CheckResult[]> {
     out.push(verdict('tfgpu', 'layer norm bwd', `${M}×${N} · dx, dγ, dβ`, m, ms));
   }
 
-  // full backward — every parameter gradient, GPU vs CPU
   {
     const tok = new CharTokenizer('the quick brown fox.');
     const cfg = { vocab: tok.vocab, dEmbed: 16, dFF: 32, blockSize: 8 };
