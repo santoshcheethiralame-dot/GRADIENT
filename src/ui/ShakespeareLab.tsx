@@ -14,6 +14,8 @@ const STEPS = 800;
 const CHUNK = 5;
 const LR = 0.003;
 const GEN = 180;
+const MIN_CHARS = 24;
+const MAX_CHARS = 4000;
 
 type Phase = 'idle' | 'training' | 'done';
 
@@ -50,12 +52,15 @@ export function ShakespeareLab() {
   const [step, setStep] = useState(0);
   const [loss, setLoss] = useState(NaN);
   const [sample, setSample] = useState('');
+  const [corpus, setCorpus] = useState(SHAKESPEARE);
   const lossHist = useRef<number[]>([]);
   const attnRef = useRef<Float32Array | null>(null);
   const attnCanvas = useRef<HTMLCanvasElement>(null);
   const running = useRef(false);
   const gpuRef = useRef<GpuNanoGpt | null>(null);
   const [, force] = useState(0);
+
+  const tooShort = corpus.trim().length < MIN_CHARS;
 
   const stop = useCallback(() => {
     running.current = false;
@@ -74,6 +79,8 @@ export function ShakespeareLab() {
   }, []);
 
   const train = useCallback(() => {
+    const text = corpus.trim().slice(0, MAX_CHARS);
+    if (text.length < MIN_CHARS) return;
     running.current = false;
     lossHist.current = [];
     attnRef.current = null;
@@ -83,15 +90,16 @@ export function ShakespeareLab() {
     setSample('');
     void (async () => {
       const { device } = await getGpuContext();
-      const tok = new CharTokenizer(SHAKESPEARE);
-      const data = tok.encode(SHAKESPEARE + SHAKESPEARE);
+      const tok = new CharTokenizer(text);
+      const reps = Math.max(2, Math.ceil((T * 4) / text.length));
+      const data = tok.encode(text.repeat(reps));
       const cfg = { vocab: tok.vocab, dEmbed: 64, dFF: 128, blockSize: T };
       const cpu = new NanoGpt(cfg, 7);
       const gpu = new GpuNanoGpt(device, cpu);
       gpuRef.current = gpu;
       const rng = mulberry32(11);
       const probe = data.slice(0, T);
-      const seed = SHAKESPEARE.slice(0, 10);
+      const seed = text.slice(0, 10);
       running.current = true;
       let s = 0;
       const loop = async (): Promise<void> => {
@@ -124,7 +132,7 @@ export function ShakespeareLab() {
       };
       setTimeout(loop, 0);
     })();
-  }, []);
+  }, [corpus]);
 
   useEffect(
     () => () => {
@@ -148,24 +156,43 @@ export function ShakespeareLab() {
   return (
     <section className="card nlab" id="shakespeare">
       <h2>
-        <span className="ch">CH6</span>nano-GPT · learns Shakespeare on the GPU
-        <span className="meta">trained live on WebGPU · forward + backward + Adam</span>
+        <span className="ch">CH6</span>nano-GPT · learns to write, live on the GPU
+        <span className="meta">trained on WebGPU · forward + backward + Adam · on your text</span>
       </h2>
 
       <div className="nlab-grid">
         <div className="nlab-left">
           <p className="nlab-reqs">
-            A from-scratch transformer trained <b>entirely on your GPU</b> on a passage of Hamlet —
-            forward, backprop and Adam all in WGSL. Watch the greedy output go from noise to
-            Shakespearean text, and the attention matrix sharpen, as the loss falls.
+            A from-scratch transformer trained <b>entirely on your GPU</b> — forward, backprop and
+            Adam all in WGSL. It ships learning a passage of Hamlet, but the corpus is yours: paste
+            lyrics, code, your bio — anything. Watch the output go from noise to your words, and the
+            attention matrix sharpen, as the loss falls.
           </p>
+          <div className="corpus-field">
+            <div className="corpus-label">
+              <span>corpus · edit to train on your own text</span>
+              <span className={tooShort ? 'corpus-count low' : 'corpus-count'}>
+                {corpus.trim().length} chars
+              </span>
+            </div>
+            <textarea
+              className="corpus-area"
+              value={corpus}
+              spellCheck={false}
+              disabled={phase === 'training'}
+              onChange={(e) => setCorpus(e.target.value)}
+            />
+            {tooShort && (
+              <span className="corpus-hint">give it at least {MIN_CHARS} characters to chew on</span>
+            )}
+          </div>
           <div className="nlab-controls">
             {phase === 'training' ? (
               <button className="btn" onClick={stop}>
                 stop
               </button>
             ) : (
-              <button className="btn primary" onClick={train}>
+              <button className="btn primary" onClick={train} disabled={tooShort}>
                 {phase === 'done' ? 'train again' : 'train on GPU'}
               </button>
             )}
@@ -211,7 +238,7 @@ export function ShakespeareLab() {
               ? 'idle — press train on GPU'
               : phase === 'done'
                 ? 'done · trained on WebGPU'
-                : 'learning Shakespeare…'}
+                : 'learning your text…'}
           </div>
         </div>
       </div>

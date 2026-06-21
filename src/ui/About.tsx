@@ -6,7 +6,7 @@ const PIPELINE = ['GPUDevice', 'GpuTensor', 'tiled matmul', 'forward', 'backprop
 const STATS = [
   { v: '49/49', l: 'self-test checks pass' },
   { v: '~97%', l: 'MNIST test accuracy' },
-  { v: '2', l: 'models · MLP + transformer' },
+  { v: '5–20×', l: 'GPU vs. 1 CPU thread' },
   { v: '0', l: 'servers · 100% in-browser' },
 ];
 
@@ -21,8 +21,9 @@ const MLP_PHASES = [
 const GPT_STEPS = [
   'architecture + autoregressive generation',
   'gradient-checked backprop + training',
-  'WGSL forward port (verified to ~1e-7)',
-  'live “watch it write” panel',
+  'full forward + backward in WGSL (~1e-7)',
+  'GPU Adam — trains Shakespeare or your own text',
+  'CPU vs GPU race — one CPU thread vs your GPU',
 ];
 
 const WGSL = `// causal_softmax.wgsl — the attention core
@@ -54,7 +55,12 @@ const FEATURES: Feature[] = [
   {
     tag: 'transformer',
     title: 'nano-GPT that writes',
-    body: 'A from-scratch char transformer: causal self-attention + MLP, hand-derived backprop verified by gradient checking. Train it live and watch it reproduce a sentence.',
+    body: 'A from-scratch char transformer — causal self-attention + MLP, hand-derived backprop — trained end to end on the GPU. Paste your own text and watch it learn to write while the attention matrix sharpens.',
+  },
+  {
+    tag: 'race',
+    title: 'CPU vs GPU, live',
+    body: 'The same transformer, same weights, trained two ways at once — one CPU thread vs your GPU in WGSL. The GPU laps it, taking many more steps and diving to far lower loss while the CPU crawls.',
   },
   {
     tag: 'visualize',
@@ -183,7 +189,8 @@ export function About({ onEnter }: { onEnter: () => void }) {
         </h2>
         <p className="about-body">
           Shipped as small, individually-verified steps — each landed only after its self-test
-          passed. The WebGPU MLP engine came first, then the transformer was layered on top.
+          passed. The WebGPU MLP engine came first, then a transformer was layered on top and trained
+          end to end on the GPU.
         </p>
         <div className="build-cols">
           <div className="build-col">
@@ -195,7 +202,7 @@ export function About({ onEnter }: { onEnter: () => void }) {
             </ol>
           </div>
           <div className="build-col">
-            <h4>nano-GPT · 4 increments</h4>
+            <h4>nano-GPT · trained on the GPU</h4>
             <ol>
               {GPT_STEPS.map((p) => (
                 <li key={p}>{p}</li>
