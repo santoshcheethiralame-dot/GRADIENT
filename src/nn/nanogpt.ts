@@ -38,6 +38,7 @@ export interface NanoGptConfig {
   dFF: number;
   blockSize: number;
   nHeads?: number;
+  nBlocks?: number;
 }
 
 export function defaultConfig(vocab: number): NanoGptConfig {
@@ -201,10 +202,8 @@ export function layerNormBackward(
   return { dx, dgamma, dbeta };
 }
 
-export interface NanoGptCache {
-  ids: number[];
-  t: number;
-  x: Float32Array;
+export interface BlockCache {
+  xin: Float32Array;
   h: Float32Array;
   Q: Float32Array;
   K: Float32Array;
@@ -216,85 +215,138 @@ export interface NanoGptCache {
   f: Float32Array;
   fg: Float32Array;
   xb: Float32Array;
+}
+
+export interface NanoGptCache {
+  ids: number[];
+  t: number;
+  x: Float32Array;
+  blocks: BlockCache[];
   xf: Float32Array;
   logits: Float32Array;
+}
+
+interface BlockW {
+  ln1g: Float32Array;
+  ln1b: Float32Array;
+  Wq: Float32Array;
+  Wk: Float32Array;
+  Wv: Float32Array;
+  Wo: Float32Array;
+  ln2g: Float32Array;
+  ln2b: Float32Array;
+  Wff1: Float32Array;
+  bff1: Float32Array;
+  Wff2: Float32Array;
+  bff2: Float32Array;
+}
+
+function makeBlock(dE: number, dFF: number, s: number, rng: () => number): BlockW {
+  return {
+    ln1g: new Float32Array(dE).fill(1),
+    ln1b: new Float32Array(dE),
+    Wq: randn(dE * dE, s, rng),
+    Wk: randn(dE * dE, s, rng),
+    Wv: randn(dE * dE, s, rng),
+    Wo: randn(dE * dE, s, rng),
+    ln2g: new Float32Array(dE).fill(1),
+    ln2b: new Float32Array(dE),
+    Wff1: randn(dE * dFF, s, rng),
+    bff1: new Float32Array(dFF),
+    Wff2: randn(dFF * dE, s, rng),
+    bff2: new Float32Array(dE),
+  };
+}
+
+function zeroBlock(dE: number, dFF: number): BlockW {
+  return {
+    ln1g: new Float32Array(dE),
+    ln1b: new Float32Array(dE),
+    Wq: new Float32Array(dE * dE),
+    Wk: new Float32Array(dE * dE),
+    Wv: new Float32Array(dE * dE),
+    Wo: new Float32Array(dE * dE),
+    ln2g: new Float32Array(dE),
+    ln2b: new Float32Array(dE),
+    Wff1: new Float32Array(dE * dFF),
+    bff1: new Float32Array(dFF),
+    Wff2: new Float32Array(dFF * dE),
+    bff2: new Float32Array(dE),
+  };
 }
 
 export class NanoGpt {
   readonly cfg: NanoGptConfig;
   readonly tokEmb: Float32Array;
   readonly posEmb: Float32Array;
-  readonly ln1g: Float32Array;
-  readonly ln1b: Float32Array;
-  readonly Wq: Float32Array;
-  readonly Wk: Float32Array;
-  readonly Wv: Float32Array;
-  readonly Wo: Float32Array;
-  readonly ln2g: Float32Array;
-  readonly ln2b: Float32Array;
-  readonly Wff1: Float32Array;
-  readonly bff1: Float32Array;
-  readonly Wff2: Float32Array;
-  readonly bff2: Float32Array;
   readonly lnfg: Float32Array;
   readonly lnfb: Float32Array;
   readonly head: Float32Array;
-
   readonly dTokEmb: Float32Array;
   readonly dPosEmb: Float32Array;
-  readonly dLn1g: Float32Array;
-  readonly dLn1b: Float32Array;
-  readonly dWq: Float32Array;
-  readonly dWk: Float32Array;
-  readonly dWv: Float32Array;
-  readonly dWo: Float32Array;
-  readonly dLn2g: Float32Array;
-  readonly dLn2b: Float32Array;
-  readonly dWff1: Float32Array;
-  readonly dbff1: Float32Array;
-  readonly dWff2: Float32Array;
-  readonly dbff2: Float32Array;
   readonly dLnfg: Float32Array;
   readonly dLnfb: Float32Array;
   readonly dHead: Float32Array;
+  readonly blocks: BlockW[];
+  readonly grads: BlockW[];
+
+  get ln1g(): Float32Array {
+    return this.blocks[0].ln1g;
+  }
+  get ln1b(): Float32Array {
+    return this.blocks[0].ln1b;
+  }
+  get Wq(): Float32Array {
+    return this.blocks[0].Wq;
+  }
+  get Wk(): Float32Array {
+    return this.blocks[0].Wk;
+  }
+  get Wv(): Float32Array {
+    return this.blocks[0].Wv;
+  }
+  get Wo(): Float32Array {
+    return this.blocks[0].Wo;
+  }
+  get ln2g(): Float32Array {
+    return this.blocks[0].ln2g;
+  }
+  get ln2b(): Float32Array {
+    return this.blocks[0].ln2b;
+  }
+  get Wff1(): Float32Array {
+    return this.blocks[0].Wff1;
+  }
+  get bff1(): Float32Array {
+    return this.blocks[0].bff1;
+  }
+  get Wff2(): Float32Array {
+    return this.blocks[0].Wff2;
+  }
+  get bff2(): Float32Array {
+    return this.blocks[0].bff2;
+  }
 
   constructor(cfg: NanoGptConfig, seed = 1, initStd = 0.02) {
     this.cfg = cfg;
     const { vocab, dEmbed: dE, dFF } = cfg;
     const rng = mulberry32(seed);
     const s = initStd;
+    const nBlocks = cfg.nBlocks ?? 1;
     this.tokEmb = randn(vocab * dE, s, rng);
     this.posEmb = randn(cfg.blockSize * dE, s, rng);
-    this.ln1g = new Float32Array(dE).fill(1);
-    this.ln1b = new Float32Array(dE);
-    this.Wq = randn(dE * dE, s, rng);
-    this.Wk = randn(dE * dE, s, rng);
-    this.Wv = randn(dE * dE, s, rng);
-    this.Wo = randn(dE * dE, s, rng);
-    this.ln2g = new Float32Array(dE).fill(1);
-    this.ln2b = new Float32Array(dE);
-    this.Wff1 = randn(dE * dFF, s, rng);
-    this.bff1 = new Float32Array(dFF);
-    this.Wff2 = randn(dFF * dE, s, rng);
-    this.bff2 = new Float32Array(dE);
+    this.blocks = [];
+    this.grads = [];
+    for (let b = 0; b < nBlocks; b++) {
+      this.blocks.push(makeBlock(dE, dFF, s, rng));
+      this.grads.push(zeroBlock(dE, dFF));
+    }
     this.lnfg = new Float32Array(dE).fill(1);
     this.lnfb = new Float32Array(dE);
     this.head = randn(dE * vocab, s, rng);
 
     this.dTokEmb = new Float32Array(vocab * dE);
     this.dPosEmb = new Float32Array(cfg.blockSize * dE);
-    this.dLn1g = new Float32Array(dE);
-    this.dLn1b = new Float32Array(dE);
-    this.dWq = new Float32Array(dE * dE);
-    this.dWk = new Float32Array(dE * dE);
-    this.dWv = new Float32Array(dE * dE);
-    this.dWo = new Float32Array(dE * dE);
-    this.dLn2g = new Float32Array(dE);
-    this.dLn2b = new Float32Array(dE);
-    this.dWff1 = new Float32Array(dE * dFF);
-    this.dbff1 = new Float32Array(dFF);
-    this.dWff2 = new Float32Array(dFF * dE);
-    this.dbff2 = new Float32Array(dE);
     this.dLnfg = new Float32Array(dE);
     this.dLnfb = new Float32Array(dE);
     this.dHead = new Float32Array(dE * vocab);
@@ -304,6 +356,11 @@ export class NanoGpt {
     const { dEmbed: dE, dFF, vocab } = this.cfg;
     const t = ids.length;
 
+    const H = this.cfg.nHeads ?? 1;
+    const dH = dE / H;
+    const scale = 1 / Math.sqrt(dH);
+    const nBlocks = this.blocks.length;
+
     const x = new Float32Array(t * dE);
     for (let i = 0; i < t; i++) {
       const te = ids[i] * dE;
@@ -311,65 +368,61 @@ export class NanoGpt {
       for (let c = 0; c < dE; c++) x[i * dE + c] = this.tokEmb[te + c] + this.posEmb[pe + c];
     }
 
-    const h = layerNormRows(x, t, dE, this.ln1g, this.ln1b);
-    const Q = matmul(h, this.Wq, t, dE, dE);
-    const K = matmul(h, this.Wk, t, dE, dE);
-    const V = matmul(h, this.Wv, t, dE, dE);
-    const H = this.cfg.nHeads ?? 1;
-    const dH = dE / H;
-    const scale = 1 / Math.sqrt(dH);
-    const ctx = new Float32Array(t * dE);
-    const attn = cache ? new Float32Array(H * t * t) : null;
-    const scores = new Float32Array(t);
-    for (let hd = 0; hd < H; hd++) {
-      const c0 = hd * dH;
-      const ab = hd * t * t;
-      for (let i = 0; i < t; i++) {
-        for (let j = 0; j <= i; j++) {
-          let dot = 0;
-          for (let c = 0; c < dH; c++) dot += Q[i * dE + c0 + c] * K[j * dE + c0 + c];
-          scores[j] = dot * scale;
-        }
-        softmaxRow(scores, 0, i + 1);
-        for (let j = 0; j <= i; j++) {
-          const a = scores[j];
-          if (attn) attn[ab + i * t + j] = a;
-          for (let c = 0; c < dH; c++) ctx[i * dE + c0 + c] += a * V[j * dE + c0 + c];
+    let stream = x;
+    const bcaches: BlockCache[] = [];
+    for (let b = 0; b < nBlocks; b++) {
+      const bp = this.blocks[b];
+      const xin = stream;
+      const h = layerNormRows(xin, t, dE, bp.ln1g, bp.ln1b);
+      const Q = matmul(h, bp.Wq, t, dE, dE);
+      const K = matmul(h, bp.Wk, t, dE, dE);
+      const V = matmul(h, bp.Wv, t, dE, dE);
+      const ctx = new Float32Array(t * dE);
+      const attn = cache ? new Float32Array(H * t * t) : null;
+      const scores = new Float32Array(t);
+      for (let hd = 0; hd < H; hd++) {
+        const c0 = hd * dH;
+        const ab = hd * t * t;
+        for (let i = 0; i < t; i++) {
+          for (let j = 0; j <= i; j++) {
+            let dot = 0;
+            for (let c = 0; c < dH; c++) dot += Q[i * dE + c0 + c] * K[j * dE + c0 + c];
+            scores[j] = dot * scale;
+          }
+          softmaxRow(scores, 0, i + 1);
+          for (let j = 0; j <= i; j++) {
+            const a = scores[j];
+            if (attn) attn[ab + i * t + j] = a;
+            for (let c = 0; c < dH; c++) ctx[i * dE + c0 + c] += a * V[j * dE + c0 + c];
+          }
         }
       }
+      const o = matmul(ctx, bp.Wo, t, dE, dE);
+      const xa = new Float32Array(t * dE);
+      for (let i = 0; i < t * dE; i++) xa[i] = xin[i] + o[i];
+      const h2 = layerNormRows(xa, t, dE, bp.ln2g, bp.ln2b);
+      const f = matmul(h2, bp.Wff1, t, dE, dFF);
+      for (let i = 0; i < t; i++) for (let c = 0; c < dFF; c++) f[i * dFF + c] += bp.bff1[c];
+      const fg = f.slice();
+      geluInPlace(fg);
+      const f2 = matmul(fg, bp.Wff2, t, dFF, dE);
+      for (let i = 0; i < t; i++) for (let c = 0; c < dE; c++) f2[i * dE + c] += bp.bff2[c];
+      const xb = new Float32Array(t * dE);
+      for (let i = 0; i < t * dE; i++) xb[i] = xa[i] + f2[i];
+      stream = xb;
+      if (cache) {
+        bcaches.push({ xin, h, Q, K, V, attn: attn as Float32Array, ctx, xa, h2, f, fg, xb });
+      }
     }
-    const o = matmul(ctx, this.Wo, t, dE, dE);
-    const xa = new Float32Array(t * dE);
-    for (let i = 0; i < t * dE; i++) xa[i] = x[i] + o[i];
 
-    const h2 = layerNormRows(xa, t, dE, this.ln2g, this.ln2b);
-    const f = matmul(h2, this.Wff1, t, dE, dFF);
-    for (let i = 0; i < t; i++) for (let c = 0; c < dFF; c++) f[i * dFF + c] += this.bff1[c];
-    const fg = f.slice();
-    geluInPlace(fg);
-    const f2 = matmul(fg, this.Wff2, t, dFF, dE);
-    for (let i = 0; i < t; i++) for (let c = 0; c < dE; c++) f2[i * dE + c] += this.bff2[c];
-    const xb = new Float32Array(t * dE);
-    for (let i = 0; i < t * dE; i++) xb[i] = xa[i] + f2[i];
-
-    const xf = layerNormRows(xb, t, dE, this.lnfg, this.lnfb);
+    const xf = layerNormRows(stream, t, dE, this.lnfg, this.lnfb);
     const logits = matmul(xf, this.head, t, dE, vocab);
 
     if (cache) {
       cache.ids = ids;
       cache.t = t;
       cache.x = x;
-      cache.h = h;
-      cache.Q = Q;
-      cache.K = K;
-      cache.V = V;
-      cache.attn = attn as Float32Array;
-      cache.ctx = ctx;
-      cache.xa = xa;
-      cache.h2 = h2;
-      cache.f = f;
-      cache.fg = fg;
-      cache.xb = xb;
+      cache.blocks = bcaches;
       cache.xf = xf;
       cache.logits = logits;
     }
@@ -440,25 +493,36 @@ export class NanoGpt {
   }
 
   params(): Array<{ name: string; w: Float32Array; g: Float32Array }> {
-    return [
+    const out: Array<{ name: string; w: Float32Array; g: Float32Array }> = [
       { name: 'tokEmb', w: this.tokEmb, g: this.dTokEmb },
       { name: 'posEmb', w: this.posEmb, g: this.dPosEmb },
-      { name: 'ln1.g', w: this.ln1g, g: this.dLn1g },
-      { name: 'ln1.b', w: this.ln1b, g: this.dLn1b },
-      { name: 'Wq', w: this.Wq, g: this.dWq },
-      { name: 'Wk', w: this.Wk, g: this.dWk },
-      { name: 'Wv', w: this.Wv, g: this.dWv },
-      { name: 'Wo', w: this.Wo, g: this.dWo },
-      { name: 'ln2.g', w: this.ln2g, g: this.dLn2g },
-      { name: 'ln2.b', w: this.ln2b, g: this.dLn2b },
-      { name: 'Wff1', w: this.Wff1, g: this.dWff1 },
-      { name: 'bff1', w: this.bff1, g: this.dbff1 },
-      { name: 'Wff2', w: this.Wff2, g: this.dWff2 },
-      { name: 'bff2', w: this.bff2, g: this.dbff2 },
+    ];
+    const multi = this.blocks.length > 1;
+    for (let b = 0; b < this.blocks.length; b++) {
+      const bp = this.blocks[b];
+      const bg = this.grads[b];
+      const p = multi ? `b${b}.` : '';
+      out.push(
+        { name: `${p}ln1.g`, w: bp.ln1g, g: bg.ln1g },
+        { name: `${p}ln1.b`, w: bp.ln1b, g: bg.ln1b },
+        { name: `${p}Wq`, w: bp.Wq, g: bg.Wq },
+        { name: `${p}Wk`, w: bp.Wk, g: bg.Wk },
+        { name: `${p}Wv`, w: bp.Wv, g: bg.Wv },
+        { name: `${p}Wo`, w: bp.Wo, g: bg.Wo },
+        { name: `${p}ln2.g`, w: bp.ln2g, g: bg.ln2g },
+        { name: `${p}ln2.b`, w: bp.ln2b, g: bg.ln2b },
+        { name: `${p}Wff1`, w: bp.Wff1, g: bg.Wff1 },
+        { name: `${p}bff1`, w: bp.bff1, g: bg.bff1 },
+        { name: `${p}Wff2`, w: bp.Wff2, g: bg.Wff2 },
+        { name: `${p}bff2`, w: bp.bff2, g: bg.bff2 },
+      );
+    }
+    out.push(
       { name: 'lnf.g', w: this.lnfg, g: this.dLnfg },
       { name: 'lnf.b', w: this.lnfb, g: this.dLnfb },
       { name: 'head', w: this.head, g: this.dHead },
-    ];
+    );
+    return out;
   }
 
   zeroGrad(): void {
@@ -468,6 +532,10 @@ export class NanoGpt {
   backward(c: NanoGptCache, targets: number[]): void {
     const { dEmbed: dE, dFF, vocab } = this.cfg;
     const t = c.t;
+    const H = this.cfg.nHeads ?? 1;
+    const dH = dE / H;
+    const scale = 1 / Math.sqrt(dH);
+    const nBlocks = this.blocks.length;
 
     const { probs } = NanoGpt.crossEntropy(c.logits, targets, t, vocab);
     const dlogits = new Float32Array(t * vocab);
@@ -477,85 +545,86 @@ export class NanoGpt {
       dlogits[off + targets[i]] -= 1 / t;
     }
 
+    const lastStream = c.blocks[nBlocks - 1].xb;
     addInto(this.dHead, matmulATB(c.xf, dlogits, t, dE, vocab));
     const dxf = matmulABT(dlogits, this.head, t, dE, vocab);
-
-    const lnf = layerNormBackward(dxf, c.xb, this.lnfg, t, dE);
+    const lnf = layerNormBackward(dxf, lastStream, this.lnfg, t, dE);
     addInto(this.dLnfg, lnf.dgamma);
     addInto(this.dLnfb, lnf.dbeta);
 
-    const dxa = lnf.dx.slice();
-    const df2 = lnf.dx;
+    let dstream = lnf.dx;
+    for (let b = nBlocks - 1; b >= 0; b--) {
+      const bp = this.blocks[b];
+      const bg = this.grads[b];
+      const cc = c.blocks[b];
 
-    addInto(this.dWff2, matmulATB(c.fg, df2, t, dFF, dE));
-    addInto(this.dbff2, colSum(df2, t, dE));
-    const dfg = matmulABT(df2, this.Wff2, t, dFF, dE);
-    const df = new Float32Array(t * dFF);
-    for (let i = 0; i < t * dFF; i++) df[i] = dfg[i] * geluGrad(c.f[i]);
-    addInto(this.dWff1, matmulATB(c.h2, df, t, dE, dFF));
-    addInto(this.dbff1, colSum(df, t, dFF));
-    const dh2 = matmulABT(df, this.Wff1, t, dE, dFF);
-    const ln2 = layerNormBackward(dh2, c.xa, this.ln2g, t, dE);
-    addInto(this.dLn2g, ln2.dgamma);
-    addInto(this.dLn2b, ln2.dbeta);
-    for (let i = 0; i < t * dE; i++) dxa[i] += ln2.dx[i];
+      const dxa = dstream.slice();
+      const df2 = dstream;
+      addInto(bg.Wff2, matmulATB(cc.fg, df2, t, dFF, dE));
+      addInto(bg.bff2, colSum(df2, t, dE));
+      const dfg = matmulABT(df2, bp.Wff2, t, dFF, dE);
+      const df = new Float32Array(t * dFF);
+      for (let i = 0; i < t * dFF; i++) df[i] = dfg[i] * geluGrad(cc.f[i]);
+      addInto(bg.Wff1, matmulATB(cc.h2, df, t, dE, dFF));
+      addInto(bg.bff1, colSum(df, t, dFF));
+      const dh2 = matmulABT(df, bp.Wff1, t, dE, dFF);
+      const ln2 = layerNormBackward(dh2, cc.xa, bp.ln2g, t, dE);
+      addInto(bg.ln2g, ln2.dgamma);
+      addInto(bg.ln2b, ln2.dbeta);
+      for (let i = 0; i < t * dE; i++) dxa[i] += ln2.dx[i];
 
-    const dx = dxa.slice();
-    const dout = dxa;
+      const dxin = dxa.slice();
+      const dout = dxa;
+      addInto(bg.Wo, matmulATB(cc.ctx, dout, t, dE, dE));
+      const dctx = matmulABT(dout, bp.Wo, t, dE, dE);
 
-    addInto(this.dWo, matmulATB(c.ctx, dout, t, dE, dE));
-    const dctx = matmulABT(dout, this.Wo, t, dE, dE);
-
-    const H = this.cfg.nHeads ?? 1;
-    const dH = dE / H;
-    const scale = 1 / Math.sqrt(dH);
-    const dQ = new Float32Array(t * dE);
-    const dK = new Float32Array(t * dE);
-    const dV = new Float32Array(t * dE);
-    for (let hd = 0; hd < H; hd++) {
-      const c0 = hd * dH;
-      const ab = hd * t * t;
-      for (let i = 0; i < t; i++) {
-        const datt = new Float32Array(i + 1);
-        for (let j = 0; j <= i; j++) {
-          let dot = 0;
-          for (let cc = 0; cc < dH; cc++) dot += dctx[i * dE + c0 + cc] * c.V[j * dE + c0 + cc];
-          datt[j] = dot;
-          const a = c.attn[ab + i * t + j];
-          for (let cc = 0; cc < dH; cc++) dV[j * dE + c0 + cc] += a * dctx[i * dE + c0 + cc];
-        }
-        let sumd = 0;
-        for (let j = 0; j <= i; j++) sumd += datt[j] * c.attn[ab + i * t + j];
-        for (let j = 0; j <= i; j++) {
-          const ds = c.attn[ab + i * t + j] * (datt[j] - sumd) * scale;
-          for (let cc = 0; cc < dH; cc++) {
-            dQ[i * dE + c0 + cc] += ds * c.K[j * dE + c0 + cc];
-            dK[j * dE + c0 + cc] += ds * c.Q[i * dE + c0 + cc];
+      const dQ = new Float32Array(t * dE);
+      const dK = new Float32Array(t * dE);
+      const dV = new Float32Array(t * dE);
+      for (let hd = 0; hd < H; hd++) {
+        const c0 = hd * dH;
+        const ab = hd * t * t;
+        for (let i = 0; i < t; i++) {
+          const datt = new Float32Array(i + 1);
+          for (let j = 0; j <= i; j++) {
+            let dot = 0;
+            for (let cx = 0; cx < dH; cx++) dot += dctx[i * dE + c0 + cx] * cc.V[j * dE + c0 + cx];
+            datt[j] = dot;
+            const a = cc.attn[ab + i * t + j];
+            for (let cx = 0; cx < dH; cx++) dV[j * dE + c0 + cx] += a * dctx[i * dE + c0 + cx];
+          }
+          let sumd = 0;
+          for (let j = 0; j <= i; j++) sumd += datt[j] * cc.attn[ab + i * t + j];
+          for (let j = 0; j <= i; j++) {
+            const ds = cc.attn[ab + i * t + j] * (datt[j] - sumd) * scale;
+            for (let cx = 0; cx < dH; cx++) {
+              dQ[i * dE + c0 + cx] += ds * cc.K[j * dE + c0 + cx];
+              dK[j * dE + c0 + cx] += ds * cc.Q[i * dE + c0 + cx];
+            }
           }
         }
       }
+      addInto(bg.Wq, matmulATB(cc.h, dQ, t, dE, dE));
+      addInto(bg.Wk, matmulATB(cc.h, dK, t, dE, dE));
+      addInto(bg.Wv, matmulATB(cc.h, dV, t, dE, dE));
+      const dh = matmulABT(dQ, bp.Wq, t, dE, dE);
+      const dhk = matmulABT(dK, bp.Wk, t, dE, dE);
+      const dhv = matmulABT(dV, bp.Wv, t, dE, dE);
+      for (let i = 0; i < t * dE; i++) dh[i] += dhk[i] + dhv[i];
+      const ln1 = layerNormBackward(dh, cc.xin, bp.ln1g, t, dE);
+      addInto(bg.ln1g, ln1.dgamma);
+      addInto(bg.ln1b, ln1.dbeta);
+      for (let i = 0; i < t * dE; i++) dxin[i] += ln1.dx[i];
+      dstream = dxin;
     }
-
-    addInto(this.dWq, matmulATB(c.h, dQ, t, dE, dE));
-    addInto(this.dWk, matmulATB(c.h, dK, t, dE, dE));
-    addInto(this.dWv, matmulATB(c.h, dV, t, dE, dE));
-    const dh = matmulABT(dQ, this.Wq, t, dE, dE);
-    const dhk = matmulABT(dK, this.Wk, t, dE, dE);
-    const dhv = matmulABT(dV, this.Wv, t, dE, dE);
-    for (let i = 0; i < t * dE; i++) dh[i] += dhk[i] + dhv[i];
-
-    const ln1 = layerNormBackward(dh, c.x, this.ln1g, t, dE);
-    addInto(this.dLn1g, ln1.dgamma);
-    addInto(this.dLn1b, ln1.dbeta);
-    for (let i = 0; i < t * dE; i++) dx[i] += ln1.dx[i];
 
     for (let i = 0; i < t; i++) {
       const ti = c.ids[i] * dE;
       const pi = i * dE;
-      for (let cc = 0; cc < dE; cc++) {
-        const g = dx[i * dE + cc];
-        this.dTokEmb[ti + cc] += g;
-        this.dPosEmb[pi + cc] += g;
+      for (let cx = 0; cx < dE; cx++) {
+        const g = dstream[i * dE + cx];
+        this.dTokEmb[ti + cx] += g;
+        this.dPosEmb[pi + cx] += g;
       }
     }
   }
