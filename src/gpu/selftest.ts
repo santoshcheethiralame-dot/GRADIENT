@@ -1124,6 +1124,40 @@ async function transformerGpuChecks(): Promise<CheckResult[]> {
     );
   }
 
+  {
+    const tok = new CharTokenizer('the quick brown fox.');
+    const cfg = { vocab: tok.vocab, dEmbed: 16, dFF: 32, blockSize: 8, nHeads: 2, nBlocks: 2 };
+    const model = new NanoGpt(cfg, 4, 0.4);
+    const T = cfg.blockSize;
+    const full = tok.encode('the quick b');
+    const ids = full.slice(0, T);
+    const targets = full.slice(1, T + 1);
+    model.zeroGrad();
+    model.backward(model.forwardCache(ids), targets);
+    const t0 = performance.now();
+    const g = await nanoGptGpuBackward(device, model, ids, targets);
+    const ms = performance.now() - t0;
+    let maxRel = 0;
+    for (const p of model.params()) {
+      const gg = g[p.name];
+      if (!gg) continue;
+      for (let i = 0; i < gg.length; i++) {
+        const re = Math.abs(gg[i] - p.g[i]) / Math.max(1e-3, Math.abs(p.g[i]));
+        if (re > maxRel) maxRel = re;
+      }
+    }
+    out.push(
+      verdict(
+        'tfgpu',
+        'backward · 2 blocks × 2 heads (GPU vs CPU)',
+        `${cfg.nBlocks} blocks · ${cfg.nHeads} heads · ${model.params().length} grads`,
+        { maxAbsErr: maxRel, maxRelErr: maxRel },
+        ms,
+        2e-2,
+      ),
+    );
+  }
+
   return out;
 }
 

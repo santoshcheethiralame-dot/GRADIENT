@@ -46,52 +46,57 @@ export async function nanoGptGpuForward(
     keep(GpuTensor.fromArray(device, arr, shape));
 
   const x = up(xData, [t, dE]);
-  const ln1g = up(model.ln1g, [dE]);
-  const ln1b = up(model.ln1b, [dE]);
-  const Wq = up(model.Wq, [dE, dE]);
-  const Wk = up(model.Wk, [dE, dE]);
-  const Wv = up(model.Wv, [dE, dE]);
-  const Wo = up(model.Wo, [dE, dE]);
-  const ln2g = up(model.ln2g, [dE]);
-  const ln2b = up(model.ln2b, [dE]);
-  const Wff1 = up(model.Wff1, [dE, model.cfg.dFF]);
-  const bff1 = up(model.bff1, [model.cfg.dFF]);
-  const Wff2 = up(model.Wff2, [model.cfg.dFF, dE]);
-  const bff2 = up(model.bff2, [dE]);
-  const lnfg = up(model.lnfg, [dE]);
-  const lnfb = up(model.lnfb, [dE]);
-  const head = up(model.head, [dE, vocab]);
-
-  const h = keep(layerNorm(device, x, ln1g, ln1b));
-  const Q = keep(matmul(device, h, Wq));
-  const K = keep(matmul(device, h, Wk));
-  const V = keep(matmul(device, h, Wv));
   const H = model.cfg.nHeads ?? 1;
   const dH = dE / H;
   const ascale = 1 / Math.sqrt(dH);
-  const ctx = keep(GpuTensor.zeros(device, [t, dE]));
-  for (let hd = 0; hd < H; hd++) {
-    const c0 = hd * dH;
-    const Qh = keep(sliceCols(device, Q, c0, dH));
-    const Kh = keep(sliceCols(device, K, c0, dH));
-    const Vh = keep(sliceCols(device, V, c0, dH));
-    const sh = keep(matmulABT(device, Qh, Kh));
-    const ah = keep(causalSoftmax(device, sh, ascale));
-    const ch = keep(matmul(device, ah, Vh));
-    pasteCols(device, ctx, ch, c0);
+  const dFF = model.cfg.dFF;
+
+  let stream = x;
+  for (let b = 0; b < model.blocks.length; b++) {
+    const B = model.blocks[b];
+    const ln1g = up(B.ln1g, [dE]);
+    const ln1b = up(B.ln1b, [dE]);
+    const Wq = up(B.Wq, [dE, dE]);
+    const Wk = up(B.Wk, [dE, dE]);
+    const Wv = up(B.Wv, [dE, dE]);
+    const Wo = up(B.Wo, [dE, dE]);
+    const ln2g = up(B.ln2g, [dE]);
+    const ln2b = up(B.ln2b, [dE]);
+    const Wff1 = up(B.Wff1, [dE, dFF]);
+    const bff1 = up(B.bff1, [dFF]);
+    const Wff2 = up(B.Wff2, [dFF, dE]);
+    const bff2 = up(B.bff2, [dE]);
+    const h = keep(layerNorm(device, stream, ln1g, ln1b));
+    const Q = keep(matmul(device, h, Wq));
+    const K = keep(matmul(device, h, Wk));
+    const V = keep(matmul(device, h, Wv));
+    const ctx = keep(GpuTensor.zeros(device, [t, dE]));
+    for (let hd = 0; hd < H; hd++) {
+      const c0 = hd * dH;
+      const Qh = keep(sliceCols(device, Q, c0, dH));
+      const Kh = keep(sliceCols(device, K, c0, dH));
+      const Vh = keep(sliceCols(device, V, c0, dH));
+      const sh = keep(matmulABT(device, Qh, Kh));
+      const ah = keep(causalSoftmax(device, sh, ascale));
+      const ch = keep(matmul(device, ah, Vh));
+      pasteCols(device, ctx, ch, c0);
+    }
+    const o = keep(matmul(device, ctx, Wo));
+    const xa = keep(addTensors(device, stream, o));
+    const h2 = keep(layerNorm(device, xa, ln2g, ln2b));
+    const f = keep(matmul(device, h2, Wff1));
+    biasAdd(device, f, bff1);
+    const fg = keep(gelu(device, f));
+    const f2 = keep(matmul(device, fg, Wff2));
+    biasAdd(device, f2, bff2);
+    const xb = keep(addTensors(device, xa, f2));
+    stream = xb;
   }
-  const o = keep(matmul(device, ctx, Wo));
-  const xa = keep(addTensors(device, x, o));
 
-  const h2 = keep(layerNorm(device, xa, ln2g, ln2b));
-  const f = keep(matmul(device, h2, Wff1));
-  biasAdd(device, f, bff1);
-  const fg = keep(gelu(device, f));
-  const f2 = keep(matmul(device, fg, Wff2));
-  biasAdd(device, f2, bff2);
-  const xb = keep(addTensors(device, xa, f2));
-
-  const xf = keep(layerNorm(device, xb, lnfg, lnfb));
+  const lnfg = up(model.lnfg, [dE]);
+  const lnfb = up(model.lnfb, [dE]);
+  const head = up(model.head, [dE, vocab]);
+  const xf = keep(layerNorm(device, stream, lnfg, lnfb));
   const logits = keep(matmul(device, xf, head));
 
   const result = await logits.toArray();
@@ -126,49 +131,81 @@ export async function nanoGptGpuBackward(
     for (let c = 0; c < dE; c++) xData[i * dE + c] = model.tokEmb[te + c] + model.posEmb[pe + c];
   }
   const x = up(xData, [t, dE]);
-  const ln1g = up(model.ln1g, [dE]);
-  const ln1b = up(model.ln1b, [dE]);
-  const Wq = up(model.Wq, [dE, dE]);
-  const Wk = up(model.Wk, [dE, dE]);
-  const Wv = up(model.Wv, [dE, dE]);
-  const Wo = up(model.Wo, [dE, dE]);
-  const ln2g = up(model.ln2g, [dE]);
-  const ln2b = up(model.ln2b, [dE]);
-  const Wff1 = up(model.Wff1, [dE, dFF]);
-  const bff1 = up(model.bff1, [dFF]);
-  const Wff2 = up(model.Wff2, [dFF, dE]);
-  const bff2 = up(model.bff2, [dE]);
+  const nBlocks = model.blocks.length;
+  const multi = nBlocks > 1;
+
+  type FwdBlock = {
+    xin: GpuTensor;
+    h: GpuTensor;
+    Q: GpuTensor;
+    K: GpuTensor;
+    V: GpuTensor;
+    ahs: GpuTensor[];
+    ctx: GpuTensor;
+    xa: GpuTensor;
+    h2: GpuTensor;
+    f: GpuTensor;
+    fg: GpuTensor;
+    Wq: GpuTensor;
+    Wk: GpuTensor;
+    Wv: GpuTensor;
+    Wo: GpuTensor;
+    Wff1: GpuTensor;
+    Wff2: GpuTensor;
+    ln1g: GpuTensor;
+    ln2g: GpuTensor;
+  };
+  const fwd: FwdBlock[] = [];
+  let stream = x;
+  for (let b = 0; b < nBlocks; b++) {
+    const B = model.blocks[b];
+    const ln1g = up(B.ln1g, [dE]);
+    const ln1b = up(B.ln1b, [dE]);
+    const Wq = up(B.Wq, [dE, dE]);
+    const Wk = up(B.Wk, [dE, dE]);
+    const Wv = up(B.Wv, [dE, dE]);
+    const Wo = up(B.Wo, [dE, dE]);
+    const ln2g = up(B.ln2g, [dE]);
+    const ln2b = up(B.ln2b, [dE]);
+    const Wff1 = up(B.Wff1, [dE, dFF]);
+    const bff1 = up(B.bff1, [dFF]);
+    const Wff2 = up(B.Wff2, [dFF, dE]);
+    const bff2 = up(B.bff2, [dE]);
+    const xin = stream;
+    const h = keep(layerNorm(device, xin, ln1g, ln1b));
+    const Q = keep(matmul(device, h, Wq));
+    const K = keep(matmul(device, h, Wk));
+    const V = keep(matmul(device, h, Wv));
+    const ahs: GpuTensor[] = [];
+    const ctx = keep(GpuTensor.zeros(device, [t, dE]));
+    for (let hd = 0; hd < H; hd++) {
+      const c0 = hd * dH;
+      const Qh = keep(sliceCols(device, Q, c0, dH));
+      const Kh = keep(sliceCols(device, K, c0, dH));
+      const Vh = keep(sliceCols(device, V, c0, dH));
+      const sh = keep(matmulABT(device, Qh, Kh));
+      const ah = keep(causalSoftmax(device, sh, ascale));
+      ahs.push(ah);
+      const ch = keep(matmul(device, ah, Vh));
+      pasteCols(device, ctx, ch, c0);
+    }
+    const o = keep(matmul(device, ctx, Wo));
+    const xa = keep(addTensors(device, xin, o));
+    const h2 = keep(layerNorm(device, xa, ln2g, ln2b));
+    const f = keep(matmul(device, h2, Wff1));
+    biasAdd(device, f, bff1);
+    const fg = keep(gelu(device, f));
+    const f2 = keep(matmul(device, fg, Wff2));
+    biasAdd(device, f2, bff2);
+    const xb = keep(addTensors(device, xa, f2));
+    stream = xb;
+    fwd.push({ xin, h, Q, K, V, ahs, ctx, xa, h2, f, fg, Wq, Wk, Wv, Wo, Wff1, Wff2, ln1g, ln2g });
+  }
+
   const lnfg = up(model.lnfg, [dE]);
   const lnfb = up(model.lnfb, [dE]);
   const head = up(model.head, [dE, vocab]);
-
-  const h = keep(layerNorm(device, x, ln1g, ln1b));
-  const Q = keep(matmul(device, h, Wq));
-  const K = keep(matmul(device, h, Wk));
-  const V = keep(matmul(device, h, Wv));
-  const ahs: GpuTensor[] = [];
-  const ctx = keep(GpuTensor.zeros(device, [t, dE]));
-  for (let hd = 0; hd < H; hd++) {
-    const c0 = hd * dH;
-    const Qh = keep(sliceCols(device, Q, c0, dH));
-    const Kh = keep(sliceCols(device, K, c0, dH));
-    const Vh = keep(sliceCols(device, V, c0, dH));
-    const sh = keep(matmulABT(device, Qh, Kh));
-    const ah = keep(causalSoftmax(device, sh, ascale));
-    ahs.push(ah);
-    const ch = keep(matmul(device, ah, Vh));
-    pasteCols(device, ctx, ch, c0);
-  }
-  const o = keep(matmul(device, ctx, Wo));
-  const xa = keep(addTensors(device, x, o));
-  const h2 = keep(layerNorm(device, xa, ln2g, ln2b));
-  const f = keep(matmul(device, h2, Wff1));
-  biasAdd(device, f, bff1);
-  const fg = keep(gelu(device, f));
-  const f2 = keep(matmul(device, fg, Wff2));
-  biasAdd(device, f2, bff2);
-  const xb = keep(addTensors(device, xa, f2));
-  const xf = keep(layerNorm(device, xb, lnfg, lnfb));
+  const xf = keep(layerNorm(device, stream, lnfg, lnfb));
   const logits = keep(matmul(device, xf, head));
 
   const probs = keep(softmax(device, logits));
@@ -177,97 +214,87 @@ export async function nanoGptGpuBackward(
 
   const dHead = keep(matmulATB(device, xf, dlogits));
   const dxf = keep(matmulABT(device, dlogits, head));
-
-  const lnf = layerNormBackward(device, xb, dxf, lnfg);
+  const lnf = layerNormBackward(device, stream, dxf, lnfg);
   keep(lnf.dx);
   keep(lnf.dgamma);
   keep(lnf.dbeta);
-  const df2 = lnf.dx;
 
-  const dWff2 = keep(matmulATB(device, fg, df2));
-  const dbff2 = keep(biasBackward(device, df2));
-  const dfg = keep(matmulABT(device, df2, Wff2));
-  const df = keep(geluBackward(device, dfg, f));
-  const dWff1 = keep(matmulATB(device, h2, df));
-  const dbff1 = keep(biasBackward(device, df));
-  const dh2 = keep(matmulABT(device, df, Wff1));
-  const ln2 = layerNormBackward(device, xa, dh2, ln2g);
-  keep(ln2.dx);
-  keep(ln2.dgamma);
-  keep(ln2.dbeta);
-  const dxa = keep(addTensors(device, df2, ln2.dx));
+  const reads: Array<[string, GpuTensor]> = [];
+  reads.push(['__dx', lnf.dx]);
+  reads.push(['head', dHead], ['lnf.g', lnf.dgamma], ['lnf.b', lnf.dbeta]);
 
-  const dWo = keep(matmulATB(device, ctx, dxa));
-  const dctx = keep(matmulABT(device, dxa, Wo));
+  let dstream = lnf.dx;
+  for (let b = nBlocks - 1; b >= 0; b--) {
+    const c = fwd[b];
+    const df2 = dstream;
+    const dWff2 = keep(matmulATB(device, c.fg, df2));
+    const dbff2 = keep(biasBackward(device, df2));
+    const dfg = keep(matmulABT(device, df2, c.Wff2));
+    const df = keep(geluBackward(device, dfg, c.f));
+    const dWff1 = keep(matmulATB(device, c.h2, df));
+    const dbff1 = keep(biasBackward(device, df));
+    const dh2 = keep(matmulABT(device, df, c.Wff1));
+    const ln2 = layerNormBackward(device, c.xa, dh2, c.ln2g);
+    keep(ln2.dx);
+    keep(ln2.dgamma);
+    keep(ln2.dbeta);
+    const dxa = keep(addTensors(device, df2, ln2.dx));
 
-  const dQ = keep(GpuTensor.zeros(device, [t, dE]));
-  const dK = keep(GpuTensor.zeros(device, [t, dE]));
-  const dV = keep(GpuTensor.zeros(device, [t, dE]));
-  for (let hd = 0; hd < H; hd++) {
-    const c0 = hd * dH;
-    const Qh = keep(sliceCols(device, Q, c0, dH));
-    const Kh = keep(sliceCols(device, K, c0, dH));
-    const Vh = keep(sliceCols(device, V, c0, dH));
-    const dch = keep(sliceCols(device, dctx, c0, dH));
-    const ah = ahs[hd];
-    const dattnH = keep(matmulABT(device, dch, Vh));
-    const dVh = keep(matmulATB(device, ah, dch));
-    const dscoresH = keep(causalSoftmaxBackward(device, ah, dattnH, ascale));
-    const dQh = keep(matmul(device, dscoresH, Kh));
-    const dKh = keep(matmulATB(device, dscoresH, Qh));
-    pasteCols(device, dQ, dQh, c0);
-    pasteCols(device, dK, dKh, c0);
-    pasteCols(device, dV, dVh, c0);
+    const dWo = keep(matmulATB(device, c.ctx, dxa));
+    const dctx = keep(matmulABT(device, dxa, c.Wo));
+    const dQ = keep(GpuTensor.zeros(device, [t, dE]));
+    const dK = keep(GpuTensor.zeros(device, [t, dE]));
+    const dV = keep(GpuTensor.zeros(device, [t, dE]));
+    for (let hd = 0; hd < H; hd++) {
+      const c0 = hd * dH;
+      const Qh = keep(sliceCols(device, c.Q, c0, dH));
+      const Kh = keep(sliceCols(device, c.K, c0, dH));
+      const Vh = keep(sliceCols(device, c.V, c0, dH));
+      const dch = keep(sliceCols(device, dctx, c0, dH));
+      const ah = c.ahs[hd];
+      const dattnH = keep(matmulABT(device, dch, Vh));
+      const dVh = keep(matmulATB(device, ah, dch));
+      const dscoresH = keep(causalSoftmaxBackward(device, ah, dattnH, ascale));
+      const dQh = keep(matmul(device, dscoresH, Kh));
+      const dKh = keep(matmulATB(device, dscoresH, Qh));
+      pasteCols(device, dQ, dQh, c0);
+      pasteCols(device, dK, dKh, c0);
+      pasteCols(device, dV, dVh, c0);
+    }
+    const dWq = keep(matmulATB(device, c.h, dQ));
+    const dWk = keep(matmulATB(device, c.h, dK));
+    const dWv = keep(matmulATB(device, c.h, dV));
+    const dhq = keep(matmulABT(device, dQ, c.Wq));
+    const dhk = keep(matmulABT(device, dK, c.Wk));
+    const dhv = keep(matmulABT(device, dV, c.Wv));
+    const dh = keep(addTensors(device, keep(addTensors(device, dhq, dhk)), dhv));
+    const ln1 = layerNormBackward(device, c.xin, dh, c.ln1g);
+    keep(ln1.dx);
+    keep(ln1.dgamma);
+    keep(ln1.dbeta);
+    const dxin = keep(addTensors(device, dxa, ln1.dx));
+    dstream = dxin;
+
+    const p = multi ? `b${b}.` : '';
+    reads.push(
+      [`${p}Wq`, dWq],
+      [`${p}Wk`, dWk],
+      [`${p}Wv`, dWv],
+      [`${p}Wo`, dWo],
+      [`${p}Wff1`, dWff1],
+      [`${p}bff1`, dbff1],
+      [`${p}Wff2`, dWff2],
+      [`${p}bff2`, dbff2],
+      [`${p}ln1.g`, ln1.dgamma],
+      [`${p}ln1.b`, ln1.dbeta],
+      [`${p}ln2.g`, ln2.dgamma],
+      [`${p}ln2.b`, ln2.dbeta],
+    );
   }
+  reads[0][1] = dstream;
 
-  const dWq = keep(matmulATB(device, h, dQ));
-  const dWk = keep(matmulATB(device, h, dK));
-  const dWv = keep(matmulATB(device, h, dV));
-  const dhq = keep(matmulABT(device, dQ, Wq));
-  const dhk = keep(matmulABT(device, dK, Wk));
-  const dhv = keep(matmulABT(device, dV, Wv));
-  const dh = keep(addTensors(device, keep(addTensors(device, dhq, dhk)), dhv));
-  const ln1 = layerNormBackward(device, x, dh, ln1g);
-  keep(ln1.dx);
-  keep(ln1.dgamma);
-  keep(ln1.dbeta);
-  const dx = keep(addTensors(device, dxa, ln1.dx));
-
-  const [
-    dxArr,
-    dHeadA,
-    dWqA,
-    dWkA,
-    dWvA,
-    dWoA,
-    dWff1A,
-    dbff1A,
-    dWff2A,
-    dbff2A,
-    dln1gA,
-    dln1bA,
-    dln2gA,
-    dln2bA,
-    dlnfgA,
-    dlnfbA,
-  ] = await Promise.all([
-    dx.toArray(),
-    dHead.toArray(),
-    dWq.toArray(),
-    dWk.toArray(),
-    dWv.toArray(),
-    dWo.toArray(),
-    dWff1.toArray(),
-    dbff1.toArray(),
-    dWff2.toArray(),
-    dbff2.toArray(),
-    ln1.dgamma.toArray(),
-    ln1.dbeta.toArray(),
-    ln2.dgamma.toArray(),
-    ln2.dbeta.toArray(),
-    lnf.dgamma.toArray(),
-    lnf.dbeta.toArray(),
-  ]);
+  const arrs = await Promise.all(reads.map(([, tn]) => tn.toArray()));
+  const dxArr = arrs[0];
 
   const dTokEmb = new Float32Array(vocab * dE);
   const dPosEmb = new Float32Array(model.cfg.blockSize * dE);
@@ -284,25 +311,11 @@ export async function nanoGptGpuBackward(
   for (const tn of tensors) tn.destroy();
   targetBuf.destroy();
 
-  return {
-    tokEmb: dTokEmb,
-    posEmb: dPosEmb,
-    'ln1.g': dln1gA,
-    'ln1.b': dln1bA,
-    Wq: dWqA,
-    Wk: dWkA,
-    Wv: dWvA,
-    Wo: dWoA,
-    'ln2.g': dln2gA,
-    'ln2.b': dln2bA,
-    Wff1: dWff1A,
-    bff1: dbff1A,
-    Wff2: dWff2A,
-    bff2: dbff2A,
-    'lnf.g': dlnfgA,
-    'lnf.b': dlnfbA,
-    head: dHeadA,
-  };
+  const out: Record<string, Float32Array> = { tokEmb: dTokEmb, posEmb: dPosEmb };
+  reads.forEach(([k], i) => {
+    if (k !== '__dx') out[k] = arrs[i];
+  });
+  return out;
 }
 
 const BLOCK_PARAMS = [
