@@ -58,8 +58,12 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>({ kind: 'init' });
   const [report, setReport] = useState<SelfTestReport | null>(null);
   const [running, setRunning] = useState(false);
-  const [view, setView] = useState<'lab' | 'about'>('lab');
+  const [view, setView] = useState<'mlp' | 'gpt' | 'about'>('mlp');
   const booted = useRef(false);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') window.scrollTo(0, 0);
+  }, [view]);
 
   const executeSelfTest = useCallback(async () => {
     setRunning(true);
@@ -117,8 +121,11 @@ export default function App() {
         </div>
         <div className="statline">
           <nav className="nav">
-            <button className={view === 'lab' ? 'active' : ''} onClick={() => setView('lab')}>
-              lab
+            <button className={view === 'mlp' ? 'active' : ''} onClick={() => setView('mlp')}>
+              mlp
+            </button>
+            <button className={view === 'gpt' ? 'active' : ''} onClick={() => setView('gpt')}>
+              gpt
             </button>
             <button className={view === 'about' ? 'active' : ''} onClick={() => setView('about')}>
               about
@@ -139,64 +146,81 @@ export default function App() {
         </div>
       </header>
 
-      {view === 'about' ? (
-        <About onEnter={() => setView('lab')} />
-      ) : (
+      {view === 'about' && <About onEnter={() => setView('mlp')} />}
+
+      {view === 'mlp' && (
         <>
           {phase.kind === 'ready' && <Overview phase={phase} report={report} />}
 
           <div className="grid">
-        <DeviceCard phase={phase} />
-        {phase.kind === 'ready' && report?.training && <TrainingCard t={report.training} />}
+            <DeviceCard phase={phase} />
+            {phase.kind === 'ready' && report?.training && <TrainingCard t={report.training} />}
 
-        {phase.kind === 'ready' && <Dashboard />}
+            {phase.kind === 'ready' && <Dashboard />}
 
-        {phase.kind === 'ready' && (
-          <section className="card" id="diag">
-            <h2>
-              <span className="ch">CH3</span>Kernel diagnostics
-              <span className="meta">GPU vs. f64 oracle · every load</span>
-            </h2>
-            <SelfTestView report={report} running={running} onRerun={executeSelfTest} />
-          </section>
-        )}
+            {phase.kind === 'ready' && (
+              <section className="card" id="diag">
+                <h2>
+                  <span className="ch">CH3</span>Kernel diagnostics
+                  <span className="meta">GPU vs. f64 oracle · every load</span>
+                </h2>
+                <SelfTestView report={report} running={running} onRerun={executeSelfTest} />
+              </section>
+            )}
 
-        {phase.kind === 'ready' && <ProfilerCard />}
+            {phase.kind === 'ready' && <ProfilerCard />}
 
-        {(phase.kind === 'ready' || phase.kind === 'cpu' || phase.kind === 'unsupported') && (
-          <NanoGptLab />
-        )}
+            {(phase.kind === 'cpu' || phase.kind === 'unsupported') && (
+              <CpuTrainer forced={phase.kind === 'cpu'} />
+            )}
 
-        {phase.kind === 'ready' && <ShakespeareLab />}
-
-        {phase.kind === 'ready' && <RaceLab />}
-
-        {phase.kind === 'ready' && <GradientFlowLab />}
-
-        {phase.kind === 'ready' && <ScaledLab />}
-
-        {phase.kind === 'ready' && <DeepLab />}
-
-        {(phase.kind === 'cpu' || phase.kind === 'unsupported') && (
-          <CpuTrainer forced={phase.kind === 'cpu'} />
-        )}
-
-        {phase.kind === 'error' && (
-          <section className="card">
-            <div className="banner fail">
-              <span className="big">Initialization error</span>
-            </div>
-            <p className="tagline" style={{ marginTop: 14 }}>
-              <code className="inline">{phase.message}</code>
-            </p>
-          </section>
-        )}
+            {phase.kind === 'error' && (
+              <section className="card">
+                <div className="banner fail">
+                  <span className="big">Initialization error</span>
+                </div>
+                <p className="tagline" style={{ marginTop: 14 }}>
+                  <code className="inline">{phase.message}</code>
+                </p>
+              </section>
+            )}
           </div>
 
           <p className="foot">
-            The full WebGPU stack — device → tensors → tiled matmul → forward → gradient-checked
-            backprop → SGD/Adam → MNIST — plus a multi-head, multi-block nano-GPT trained on the GPU.
-            51/51 self-test on every load.
+            WebGPU from the metal up — device → tensors → tiled matmul → forward → gradient-checked
+            backprop → SGD/Adam → a 2-layer MLP on MNIST (~97%). 51/51 self-test on every load. The
+            <button className="linkish" onClick={() => setView('gpt')}>
+              {' '}
+              transformer →
+            </button>
+          </p>
+        </>
+      )}
+
+      {view === 'gpt' && (
+        <>
+          {phase.kind === 'ready' && <Overview phase={phase} report={report} />}
+
+          <div className="grid">
+            {(phase.kind === 'ready' || phase.kind === 'cpu' || phase.kind === 'unsupported') && (
+              <NanoGptLab />
+            )}
+
+            {phase.kind === 'ready' && <ShakespeareLab />}
+
+            {phase.kind === 'ready' && <RaceLab />}
+
+            {phase.kind === 'ready' && <GradientFlowLab />}
+
+            {phase.kind === 'ready' && <ScaledLab />}
+
+            {phase.kind === 'ready' && <DeepLab />}
+          </div>
+
+          <p className="foot">
+            A from-scratch nano-GPT — multi-head attention, stacked blocks, a byte-pair tokenizer —
+            trained entirely on the GPU, with a live CPU-vs-GPU race and a gradient-flow view of
+            backprop. 51/51 self-test on every load.
           </p>
         </>
       )}

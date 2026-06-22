@@ -504,6 +504,18 @@ table.diag .verdict.fail {
   font-weight: 600;
   font-size: 11px;
 }
+.linkish {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--purple);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.linkish:hover {
+  opacity: 0.75;
+}
 code.inline {
   font-family: var(--mono);
   background: var(--surface-2);
