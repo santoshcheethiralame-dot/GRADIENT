@@ -221,6 +221,7 @@ export async function nanoGptGpuBackward(
 
   const reads: Array<[string, GpuTensor]> = [];
   reads.push(['__dx', lnf.dx]);
+  reads.push(['__loss', keep(crossEntropy(device, probs, targetBuf))]);
   reads.push(['head', dHead], ['lnf.g', lnf.dgamma], ['lnf.b', lnf.dbeta]);
 
   let dstream = lnf.dx;

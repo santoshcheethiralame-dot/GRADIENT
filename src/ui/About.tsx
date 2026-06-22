@@ -4,7 +4,7 @@ const REPO = 'https://github.com/santoshcheethiralame-dot/GRADIENT';
 const PIPELINE = ['GPUDevice', 'GpuTensor', 'tiled matmul', 'forward', 'backprop', 'Adam', 'MNIST'];
 
 const STATS = [
-  { v: '49/49', l: 'self-test checks pass' },
+  { v: '51/51', l: 'self-test checks pass' },
   { v: '~97%', l: 'MNIST test accuracy' },
   { v: '5–20×', l: 'GPU vs. 1 CPU thread' },
   { v: '0', l: 'servers · 100% in-browser' },
@@ -25,6 +25,7 @@ const GPT_STEPS = [
   'GPU Adam — trains Shakespeare or your own text',
   'CPU vs GPU race — one CPU thread vs your GPU',
   'multi-head attention — verified vs CPU + PyTorch',
+  'stacked blocks + a byte-pair tokenizer (deeper model)',
 ];
 
 const WGSL = `// causal_softmax.wgsl — the attention core
@@ -72,6 +73,11 @@ const FEATURES: Feature[] = [
     tag: 'scale',
     title: 'Scaled & multi-head',
     body: 'A 4-head, 128-dim attention block over a 64-token context, trained on the GPU on a page of Shakespeare at ~700 tokens/sec. Multi-head attention ported to WGSL and gradient-checked against both the CPU and PyTorch.',
+  },
+  {
+    tag: 'deep',
+    title: 'Deep & byte-pair',
+    body: 'Stack the block: a 2-block, 3-head transformer over a learned byte-pair-encoding vocabulary, trained on the GPU. The multi-block forward and backward are gradient-checked and diffed against the CPU oracle on every load.',
   },
   {
     tag: 'visualize',
@@ -174,7 +180,7 @@ export function About({ onEnter }: { onEnter: () => void }) {
             against <b>PyTorch autograd</b> — every gradient agrees to f32 precision (~1e-7).
           </p>
           <div className="proof-big">
-            <b>49 / 49</b>
+            <b>51 / 51</b>
             <span>kernel + gradient checks · rel. err &lt; 1e-3</span>
           </div>
         </div>

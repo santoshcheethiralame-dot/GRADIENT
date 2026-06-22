@@ -13,6 +13,7 @@ import { ShakespeareLab } from './ui/ShakespeareLab';
 import { RaceLab } from './ui/RaceLab';
 import { GradientFlowLab } from './ui/GradientFlowLab';
 import { ScaledLab } from './ui/ScaledLab';
+import { DeepLab } from './ui/DeepLab';
 import { About } from './ui/About';
 import { runProfile, type ProfileRow } from './gpu/profile';
 
@@ -174,6 +175,8 @@ export default function App() {
 
         {phase.kind === 'ready' && <ScaledLab />}
 
+        {phase.kind === 'ready' && <DeepLab />}
+
         {(phase.kind === 'cpu' || phase.kind === 'unsupported') && (
           <CpuTrainer forced={phase.kind === 'cpu'} />
         )}
@@ -192,8 +195,8 @@ export default function App() {
 
           <p className="foot">
             The full WebGPU stack — device → tensors → tiled matmul → forward → gradient-checked
-            backprop → SGD/Adam → MNIST — plus nano-GPT, a char transformer trained on the GPU.
-            49/49 self-test on every load.
+            backprop → SGD/Adam → MNIST — plus a multi-head, multi-block nano-GPT trained on the GPU.
+            51/51 self-test on every load.
           </p>
         </>
       )}
