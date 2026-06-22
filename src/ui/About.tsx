@@ -24,6 +24,7 @@ const GPT_STEPS = [
   'full forward + backward in WGSL (~1e-7)',
   'GPU Adam — trains Shakespeare or your own text',
   'CPU vs GPU race — one CPU thread vs your GPU',
+  'multi-head attention — verified vs CPU + PyTorch',
 ];
 
 const WGSL = `// causal_softmax.wgsl — the attention core
@@ -66,6 +67,11 @@ const FEATURES: Feature[] = [
     tag: 'backprop',
     title: 'See gradients flow',
     body: 'Most demos show attention — the forward pass. This shows the backward one: every layer’s gradient magnitude, live, ordered from the loss at the LM head back to the embeddings, computed by the same GPU backward that trains the net.',
+  },
+  {
+    tag: 'scale',
+    title: 'Scaled & multi-head',
+    body: 'A 4-head, 128-dim attention block over a 64-token context, trained on the GPU on a page of Shakespeare at ~700 tokens/sec. Multi-head attention ported to WGSL and gradient-checked against both the CPU and PyTorch.',
   },
   {
     tag: 'visualize',
