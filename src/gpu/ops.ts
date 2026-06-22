@@ -23,6 +23,8 @@ import geluBackwardSrc from './shaders/gelu_backward.wgsl?raw';
 import mulSrc from './shaders/mul.wgsl?raw';
 import causalSoftmaxBackwardSrc from './shaders/causal_softmax_backward.wgsl?raw';
 import layerNormBackwardSrc from './shaders/layer_norm_backward.wgsl?raw';
+import sliceColsSrc from './shaders/slice_cols.wgsl?raw';
+import pasteColsSrc from './shaders/paste_cols.wgsl?raw';
 
 const WORKGROUP = 16;
 const WG1D = 64;
@@ -650,4 +652,46 @@ export function layerNormBackward(
   tmp.destroy();
   xhat.destroy();
   return { dx, dgamma, dbeta };
+}
+
+export function sliceCols(
+  device: GPUDevice,
+  src: GpuTensor,
+  c0: number,
+  w: number,
+  out?: GpuTensor,
+): GpuTensor {
+  if (src.shape.length !== 2) throw new Error('sliceCols: src must be 2-D');
+  const [M, N] = src.shape;
+  const o = out ?? GpuTensor.zeros(device, [M, w], { label: 'slice_cols.out' });
+  dispatch1D(
+    device,
+    getComputePipeline(device, 'slice_cols', sliceColsSrc),
+    [
+      { binding: 0, resource: { buffer: src.buffer } },
+      { binding: 1, resource: { buffer: o.buffer } },
+      { binding: 2, resource: { buffer: metaBuffer(device, [M, N, c0, w]) } },
+    ],
+    M * w,
+    'slice_cols',
+  );
+  return o;
+}
+
+export function pasteCols(device: GPUDevice, dst: GpuTensor, src: GpuTensor, c0: number): GpuTensor {
+  if (dst.shape.length !== 2 || src.shape.length !== 2) throw new Error('pasteCols: 2-D only');
+  const [M, N] = dst.shape;
+  const w = src.shape[1];
+  dispatch1D(
+    device,
+    getComputePipeline(device, 'paste_cols', pasteColsSrc),
+    [
+      { binding: 0, resource: { buffer: src.buffer } },
+      { binding: 1, resource: { buffer: dst.buffer } },
+      { binding: 2, resource: { buffer: metaBuffer(device, [M, N, c0, w]) } },
+    ],
+    M * w,
+    'paste_cols',
+  );
+  return dst;
 }

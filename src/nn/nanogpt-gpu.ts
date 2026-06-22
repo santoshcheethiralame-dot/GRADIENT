@@ -17,6 +17,8 @@ import {
   geluBackward,
   addTensors,
   createU32Buffer,
+  sliceCols,
+  pasteCols,
 } from '../gpu/ops';
 import { NanoGpt } from './nanogpt';
 
@@ -64,9 +66,20 @@ export async function nanoGptGpuForward(
   const Q = keep(matmul(device, h, Wq));
   const K = keep(matmul(device, h, Wk));
   const V = keep(matmul(device, h, Wv));
-  const scores = keep(matmulABT(device, Q, K));
-  const attn = keep(causalSoftmax(device, scores, 1 / Math.sqrt(dE)));
-  const ctx = keep(matmul(device, attn, V));
+  const H = model.cfg.nHeads ?? 1;
+  const dH = dE / H;
+  const ascale = 1 / Math.sqrt(dH);
+  const ctx = keep(GpuTensor.zeros(device, [t, dE]));
+  for (let hd = 0; hd < H; hd++) {
+    const c0 = hd * dH;
+    const Qh = keep(sliceCols(device, Q, c0, dH));
+    const Kh = keep(sliceCols(device, K, c0, dH));
+    const Vh = keep(sliceCols(device, V, c0, dH));
+    const sh = keep(matmulABT(device, Qh, Kh));
+    const ah = keep(causalSoftmax(device, sh, ascale));
+    const ch = keep(matmul(device, ah, Vh));
+    pasteCols(device, ctx, ch, c0);
+  }
   const o = keep(matmul(device, ctx, Wo));
   const xa = keep(addTensors(device, x, o));
 
@@ -94,7 +107,9 @@ export async function nanoGptGpuBackward(
 ): Promise<Record<string, Float32Array>> {
   const { dEmbed: dE, dFF, vocab } = model.cfg;
   const t = ids.length;
-  const scale = 1 / Math.sqrt(dE);
+  const H = model.cfg.nHeads ?? 1;
+  const dH = dE / H;
+  const ascale = 1 / Math.sqrt(dH);
 
   const tensors: GpuTensor[] = [];
   const keep = <T extends GpuTensor>(g: T): T => {
@@ -131,9 +146,19 @@ export async function nanoGptGpuBackward(
   const Q = keep(matmul(device, h, Wq));
   const K = keep(matmul(device, h, Wk));
   const V = keep(matmul(device, h, Wv));
-  const scores = keep(matmulABT(device, Q, K));
-  const attn = keep(causalSoftmax(device, scores, scale));
-  const ctx = keep(matmul(device, attn, V));
+  const ahs: GpuTensor[] = [];
+  const ctx = keep(GpuTensor.zeros(device, [t, dE]));
+  for (let hd = 0; hd < H; hd++) {
+    const c0 = hd * dH;
+    const Qh = keep(sliceCols(device, Q, c0, dH));
+    const Kh = keep(sliceCols(device, K, c0, dH));
+    const Vh = keep(sliceCols(device, V, c0, dH));
+    const sh = keep(matmulABT(device, Qh, Kh));
+    const ah = keep(causalSoftmax(device, sh, ascale));
+    ahs.push(ah);
+    const ch = keep(matmul(device, ah, Vh));
+    pasteCols(device, ctx, ch, c0);
+  }
   const o = keep(matmul(device, ctx, Wo));
   const xa = keep(addTensors(device, x, o));
   const h2 = keep(layerNorm(device, xa, ln2g, ln2b));
@@ -175,11 +200,25 @@ export async function nanoGptGpuBackward(
   const dWo = keep(matmulATB(device, ctx, dxa));
   const dctx = keep(matmulABT(device, dxa, Wo));
 
-  const dattn = keep(matmulABT(device, dctx, V));
-  const dV = keep(matmulATB(device, attn, dctx));
-  const dscores = keep(causalSoftmaxBackward(device, attn, dattn, scale));
-  const dQ = keep(matmul(device, dscores, K));
-  const dK = keep(matmulATB(device, dscores, Q));
+  const dQ = keep(GpuTensor.zeros(device, [t, dE]));
+  const dK = keep(GpuTensor.zeros(device, [t, dE]));
+  const dV = keep(GpuTensor.zeros(device, [t, dE]));
+  for (let hd = 0; hd < H; hd++) {
+    const c0 = hd * dH;
+    const Qh = keep(sliceCols(device, Q, c0, dH));
+    const Kh = keep(sliceCols(device, K, c0, dH));
+    const Vh = keep(sliceCols(device, V, c0, dH));
+    const dch = keep(sliceCols(device, dctx, c0, dH));
+    const ah = ahs[hd];
+    const dattnH = keep(matmulABT(device, dch, Vh));
+    const dVh = keep(matmulATB(device, ah, dch));
+    const dscoresH = keep(causalSoftmaxBackward(device, ah, dattnH, ascale));
+    const dQh = keep(matmul(device, dscoresH, Kh));
+    const dKh = keep(matmulATB(device, dscoresH, Qh));
+    pasteCols(device, dQ, dQh, c0);
+    pasteCols(device, dK, dKh, c0);
+    pasteCols(device, dV, dVh, c0);
+  }
 
   const dWq = keep(matmulATB(device, h, dQ));
   const dWk = keep(matmulATB(device, h, dK));
@@ -341,7 +380,9 @@ export class GpuNanoGpt {
     const device = this.device;
     const { dEmbed: dE } = this.cfg;
     const t = ids.length;
-    const scale = 1 / Math.sqrt(dE);
+    const H = this.cfg.nHeads ?? 1;
+    const dH = dE / H;
+    const ascale = 1 / Math.sqrt(dH);
     const P = this.p;
     const scratch: GpuTensor[] = [];
     const k = <T extends GpuTensor>(g: T): T => {
@@ -361,9 +402,19 @@ export class GpuNanoGpt {
     const Q = k(matmul(device, h, P.Wq));
     const K = k(matmul(device, h, P.Wk));
     const V = k(matmul(device, h, P.Wv));
-    const scores = k(matmulABT(device, Q, K));
-    const attn = k(causalSoftmax(device, scores, scale));
-    const ctx = k(matmul(device, attn, V));
+    const ahs: GpuTensor[] = [];
+    const ctx = k(GpuTensor.zeros(device, [t, dE]));
+    for (let hd = 0; hd < H; hd++) {
+      const c0 = hd * dH;
+      const Qh = k(sliceCols(device, Q, c0, dH));
+      const Kh = k(sliceCols(device, K, c0, dH));
+      const Vh = k(sliceCols(device, V, c0, dH));
+      const sh = k(matmulABT(device, Qh, Kh));
+      const ah = k(causalSoftmax(device, sh, ascale));
+      ahs.push(ah);
+      const ch = k(matmul(device, ah, Vh));
+      pasteCols(device, ctx, ch, c0);
+    }
     const o = k(matmul(device, ctx, P.Wo));
     const xa = k(addTensors(device, x, o));
     const h2 = k(layerNorm(device, xa, P.ln2g, P.ln2b));
@@ -400,11 +451,25 @@ export class GpuNanoGpt {
     const dxa = k(addTensors(device, df2, ln2.dx));
     const dWo = k(matmulATB(device, ctx, dxa));
     const dctx = k(matmulABT(device, dxa, P.Wo));
-    const dattn = k(matmulABT(device, dctx, V));
-    const dV = k(matmulATB(device, attn, dctx));
-    const dscores = k(causalSoftmaxBackward(device, attn, dattn, scale));
-    const dQ = k(matmul(device, dscores, K));
-    const dK = k(matmulATB(device, dscores, Q));
+    const dQ = k(GpuTensor.zeros(device, [t, dE]));
+    const dK = k(GpuTensor.zeros(device, [t, dE]));
+    const dV = k(GpuTensor.zeros(device, [t, dE]));
+    for (let hd = 0; hd < H; hd++) {
+      const c0 = hd * dH;
+      const Qh = k(sliceCols(device, Q, c0, dH));
+      const Kh = k(sliceCols(device, K, c0, dH));
+      const Vh = k(sliceCols(device, V, c0, dH));
+      const dch = k(sliceCols(device, dctx, c0, dH));
+      const ah = ahs[hd];
+      const dattnH = k(matmulABT(device, dch, Vh));
+      const dVh = k(matmulATB(device, ah, dch));
+      const dscoresH = k(causalSoftmaxBackward(device, ah, dattnH, ascale));
+      const dQh = k(matmul(device, dscoresH, Kh));
+      const dKh = k(matmulATB(device, dscoresH, Qh));
+      pasteCols(device, dQ, dQh, c0);
+      pasteCols(device, dK, dKh, c0);
+      pasteCols(device, dV, dVh, c0);
+    }
     const dWq = k(matmulATB(device, h, dQ));
     const dWk = k(matmulATB(device, h, dK));
     const dWv = k(matmulATB(device, h, dV));
@@ -482,7 +547,9 @@ export class GpuNanoGpt {
     const device = this.device;
     const { dEmbed: dE } = this.cfg;
     const t = ids.length;
-    const scale = 1 / Math.sqrt(dE);
+    const H = this.cfg.nHeads ?? 1;
+    const dH = dE / H;
+    const ascale = 1 / Math.sqrt(dH);
     const P = this.p;
     const scratch: GpuTensor[] = [];
     const k = <T extends GpuTensor>(g: T): T => {
@@ -499,8 +566,10 @@ export class GpuNanoGpt {
     const h = k(layerNorm(device, x, P.ln1g, P.ln1b));
     const Q = k(matmul(device, h, P.Wq));
     const K = k(matmul(device, h, P.Wk));
-    const scores = k(matmulABT(device, Q, K));
-    const attn = k(causalSoftmax(device, scores, scale));
+    const Qh = k(sliceCols(device, Q, 0, dH));
+    const Kh = k(sliceCols(device, K, 0, dH));
+    const scores = k(matmulABT(device, Qh, Kh));
+    const attn = k(causalSoftmax(device, scores, ascale));
     const arr = await attn.toArray();
     for (const g of scratch) g.destroy();
     return arr;
