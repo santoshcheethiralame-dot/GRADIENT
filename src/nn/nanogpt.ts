@@ -37,6 +37,7 @@ export interface NanoGptConfig {
   dEmbed: number;
   dFF: number;
   blockSize: number;
+  nHeads?: number;
 }
 
 export function defaultConfig(vocab: number): NanoGptConfig {
@@ -314,21 +315,27 @@ export class NanoGpt {
     const Q = matmul(h, this.Wq, t, dE, dE);
     const K = matmul(h, this.Wk, t, dE, dE);
     const V = matmul(h, this.Wv, t, dE, dE);
-    const scale = 1 / Math.sqrt(dE);
+    const H = this.cfg.nHeads ?? 1;
+    const dH = dE / H;
+    const scale = 1 / Math.sqrt(dH);
     const ctx = new Float32Array(t * dE);
-    const attn = cache ? new Float32Array(t * t) : null;
+    const attn = cache ? new Float32Array(H * t * t) : null;
     const scores = new Float32Array(t);
-    for (let i = 0; i < t; i++) {
-      for (let j = 0; j <= i; j++) {
-        let dot = 0;
-        for (let c = 0; c < dE; c++) dot += Q[i * dE + c] * K[j * dE + c];
-        scores[j] = dot * scale;
-      }
-      softmaxRow(scores, 0, i + 1);
-      for (let j = 0; j <= i; j++) {
-        const a = scores[j];
-        if (attn) attn[i * t + j] = a;
-        for (let c = 0; c < dE; c++) ctx[i * dE + c] += a * V[j * dE + c];
+    for (let hd = 0; hd < H; hd++) {
+      const c0 = hd * dH;
+      const ab = hd * t * t;
+      for (let i = 0; i < t; i++) {
+        for (let j = 0; j <= i; j++) {
+          let dot = 0;
+          for (let c = 0; c < dH; c++) dot += Q[i * dE + c0 + c] * K[j * dE + c0 + c];
+          scores[j] = dot * scale;
+        }
+        softmaxRow(scores, 0, i + 1);
+        for (let j = 0; j <= i; j++) {
+          const a = scores[j];
+          if (attn) attn[ab + i * t + j] = a;
+          for (let c = 0; c < dH; c++) ctx[i * dE + c0 + c] += a * V[j * dE + c0 + c];
+        }
       }
     }
     const o = matmul(ctx, this.Wo, t, dE, dE);
@@ -499,26 +506,32 @@ export class NanoGpt {
     addInto(this.dWo, matmulATB(c.ctx, dout, t, dE, dE));
     const dctx = matmulABT(dout, this.Wo, t, dE, dE);
 
-    const scale = 1 / Math.sqrt(dE);
+    const H = this.cfg.nHeads ?? 1;
+    const dH = dE / H;
+    const scale = 1 / Math.sqrt(dH);
     const dQ = new Float32Array(t * dE);
     const dK = new Float32Array(t * dE);
     const dV = new Float32Array(t * dE);
-    for (let i = 0; i < t; i++) {
-      const datt = new Float32Array(i + 1);
-      for (let j = 0; j <= i; j++) {
-        let dot = 0;
-        for (let cc = 0; cc < dE; cc++) dot += dctx[i * dE + cc] * c.V[j * dE + cc];
-        datt[j] = dot;
-        const a = c.attn[i * t + j];
-        for (let cc = 0; cc < dE; cc++) dV[j * dE + cc] += a * dctx[i * dE + cc];
-      }
-      let sumd = 0;
-      for (let j = 0; j <= i; j++) sumd += datt[j] * c.attn[i * t + j];
-      for (let j = 0; j <= i; j++) {
-        const ds = c.attn[i * t + j] * (datt[j] - sumd) * scale;
-        for (let cc = 0; cc < dE; cc++) {
-          dQ[i * dE + cc] += ds * c.K[j * dE + cc];
-          dK[j * dE + cc] += ds * c.Q[i * dE + cc];
+    for (let hd = 0; hd < H; hd++) {
+      const c0 = hd * dH;
+      const ab = hd * t * t;
+      for (let i = 0; i < t; i++) {
+        const datt = new Float32Array(i + 1);
+        for (let j = 0; j <= i; j++) {
+          let dot = 0;
+          for (let cc = 0; cc < dH; cc++) dot += dctx[i * dE + c0 + cc] * c.V[j * dE + c0 + cc];
+          datt[j] = dot;
+          const a = c.attn[ab + i * t + j];
+          for (let cc = 0; cc < dH; cc++) dV[j * dE + c0 + cc] += a * dctx[i * dE + c0 + cc];
+        }
+        let sumd = 0;
+        for (let j = 0; j <= i; j++) sumd += datt[j] * c.attn[ab + i * t + j];
+        for (let j = 0; j <= i; j++) {
+          const ds = c.attn[ab + i * t + j] * (datt[j] - sumd) * scale;
+          for (let cc = 0; cc < dH; cc++) {
+            dQ[i * dE + c0 + cc] += ds * c.K[j * dE + c0 + cc];
+            dK[j * dE + c0 + cc] += ds * c.Q[i * dE + c0 + cc];
+          }
         }
       }
     }
