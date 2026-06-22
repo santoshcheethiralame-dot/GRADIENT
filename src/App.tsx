@@ -58,7 +58,7 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>({ kind: 'init' });
   const [report, setReport] = useState<SelfTestReport | null>(null);
   const [running, setRunning] = useState(false);
-  const [view, setView] = useState<'mlp' | 'gpt' | 'about'>('mlp');
+  const [view, setView] = useState<'mlp' | 'gpt' | 'about'>('about');
   const booted = useRef(false);
 
   useEffect(() => {
@@ -407,7 +407,7 @@ function SelfTestView({
 
 function TrainingCard({ t }: { t: TrainingResult }) {
   return (
-    <section className="card">
+    <section className="card" id="ref">
       <h2>
         <span className="ch">CH0</span>Reference train · synthetic
       </h2>
