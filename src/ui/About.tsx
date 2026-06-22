@@ -63,6 +63,11 @@ const FEATURES: Feature[] = [
     body: 'The same transformer, same weights, trained two ways at once — one CPU thread vs your GPU in WGSL. The GPU laps it, taking many more steps and diving to far lower loss while the CPU crawls.',
   },
   {
+    tag: 'backprop',
+    title: 'See gradients flow',
+    body: 'Most demos show attention — the forward pass. This shows the backward one: every layer’s gradient magnitude, live, ordered from the loss at the LM head back to the embeddings, computed by the same GPU backward that trains the net.',
+  },
+  {
     tag: 'visualize',
     title: 'See it think',
     body: 'Live loss/accuracy traces, activation heatmaps, a PCA embedding projector that pulls the digit classes apart, and a sampled loss-landscape surface around the weights.',

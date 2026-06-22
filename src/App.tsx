@@ -11,6 +11,7 @@ import CpuTrainer from './ui/CpuTrainer';
 import { NanoGptLab } from './ui/NanoGptLab';
 import { ShakespeareLab } from './ui/ShakespeareLab';
 import { RaceLab } from './ui/RaceLab';
+import { GradientFlowLab } from './ui/GradientFlowLab';
 import { About } from './ui/About';
 import { runProfile, type ProfileRow } from './gpu/profile';
 
@@ -167,6 +168,8 @@ export default function App() {
         {phase.kind === 'ready' && <ShakespeareLab />}
 
         {phase.kind === 'ready' && <RaceLab />}
+
+        {phase.kind === 'ready' && <GradientFlowLab />}
 
         {(phase.kind === 'cpu' || phase.kind === 'unsupported') && (
           <CpuTrainer forced={phase.kind === 'cpu'} />
