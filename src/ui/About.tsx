@@ -164,7 +164,8 @@ export function About({ onEnter }: { onEnter: () => void }) {
             self-test: each GPU kernel is computed and diffed against an independent <b>f64 CPU
             oracle</b> across a spread of shapes, and the entire backward pass is gated by{' '}
             <b>numerical gradient checking</b> (analytic vs. central-difference). Nothing is asserted
-            — it's measured, in your browser.
+            — it's measured, in your browser. Offline, the same hand-derived backward is diffed
+            against <b>PyTorch autograd</b> — every gradient agrees to f32 precision (~1e-7).
           </p>
           <div className="proof-big">
             <b>49 / 49</b>
