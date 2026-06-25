@@ -176,11 +176,12 @@ function drawDigit(canvas: HTMLCanvasElement | null, input: Float32Array, side =
 }
 
 const THERMAL: Array<[number, [number, number, number]]> = [
-  [0.0, [21, 16, 31]],
-  [0.3, [72, 40, 112]],
-  [0.55, [139, 92, 246]],
-  [0.78, [236, 72, 153]],
-  [1.0, [249, 168, 212]],
+  [0.0, [9, 13, 24]],
+  [0.28, [28, 78, 150]],
+  [0.52, [46, 157, 255]],
+  [0.76, [255, 176, 64]],
+  [0.92, [255, 214, 90]],
+  [1.0, [255, 246, 214]],
 ];
 function thermal(t: number): [number, number, number] {
   t = Math.max(0, Math.min(1, t));
@@ -211,7 +212,7 @@ function drawHidden(canvas: HTMLCanvasElement | null, hidden: Float32Array): voi
   for (let i = 0; i < dim; i++) if (hidden[i] > max) max = hidden[i];
   const img = ctx.createImageData(side, side);
   for (let i = 0; i < side * side; i++) {
-    const [r, g, b] = i < dim ? thermal(hidden[i] / max) : [8, 10, 14];
+    const [r, g, b] = i < dim ? thermal(hidden[i] / max) : [9, 13, 24];
     img.data[i * 4] = r;
     img.data[i * 4 + 1] = g;
     img.data[i * 4 + 2] = b;
@@ -251,8 +252,8 @@ function drawLoss(canvas: HTMLCanvasElement | null, loss: number[], acc: number[
   const yOf = (v: number, max: number) => H - pad - (v / max) * (H - 2 * pad);
   const xOf = (i: number) => (i / (n - 1)) * W;
 
-  ctx.lineWidth = 1.8 * dpr;
-  ctx.strokeStyle = '#c084fc';
+  ctx.lineWidth = 2.8 * dpr;
+  ctx.strokeStyle = '#ffd24a';
   ctx.beginPath();
   for (let i = 0; i < n; i++) {
     const x = xOf(i);
@@ -261,6 +262,14 @@ function drawLoss(canvas: HTMLCanvasElement | null, loss: number[], acc: number[
     else ctx.lineTo(x, y);
   }
   ctx.stroke();
+  ctx.save();
+  ctx.shadowColor = '#ffd24a';
+  ctx.shadowBlur = 8 * dpr;
+  ctx.fillStyle = '#ffd24a';
+  ctx.beginPath();
+  ctx.arc(xOf(n - 1), yOf(acc[n - 1], 1), 3 * dpr, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 
   ctx.beginPath();
   ctx.moveTo(0, yOf(loss[0], maxLoss));
@@ -269,13 +278,13 @@ function drawLoss(canvas: HTMLCanvasElement | null, loss: number[], acc: number[
   ctx.lineTo(0, H);
   ctx.closePath();
   const grad = ctx.createLinearGradient(0, 0, 0, H);
-  grad.addColorStop(0, 'rgba(236,72,153,0.38)');
-  grad.addColorStop(1, 'rgba(236,72,153,0)');
+  grad.addColorStop(0, 'rgba(255,176,64,0.22)');
+  grad.addColorStop(1, 'rgba(46,157,255,0)');
   ctx.fillStyle = grad;
   ctx.fill();
 
-  ctx.lineWidth = 2.8 * dpr;
-  ctx.strokeStyle = '#f472b6';
+  ctx.lineWidth = 1.6 * dpr;
+  ctx.strokeStyle = '#3aa0ff';
   ctx.shadowBlur = 0;
   ctx.beginPath();
   for (let i = 0; i < n; i++) {
@@ -287,14 +296,14 @@ function drawLoss(canvas: HTMLCanvasElement | null, loss: number[], acc: number[
   ctx.stroke();
   ctx.beginPath();
   ctx.arc(W - 1, yOf(loss[n - 1], maxLoss), 3 * dpr, 0, Math.PI * 2);
-  ctx.fillStyle = '#f472b6';
+  ctx.fillStyle = '#ffd24a';
   ctx.fill();
   ctx.shadowBlur = 0;
 }
 
 const CLASS_COLORS = [
-  '#a78bfa', '#ec4899', '#38d6ff', '#f59e0b', '#4ade80',
-  '#fb923c', '#818cf8', '#f43f5e', '#facc15', '#2dd4bf',
+  '#4f9dff', '#3fc7bd', '#62cf6a', '#e6c44f', '#f0954e',
+  '#ee6d8b', '#7fb2ec', '#a6d65f', '#e88ad0', '#4cd0a6',
 ];
 
 function drawScatter(canvas: HTMLCanvasElement | null, emb: EmbeddingMsg | null): void {
@@ -358,10 +367,10 @@ function drawLandscape(canvas: HTMLCanvasElement | null, land: LandscapeMsg | nu
   const px = (i: number, j: number) => cx + (i - j) * sx;
   const py = (i: number, j: number, h: number) => cyTop + (i + j) * sy - norm(h) * amp;
 
-  const lo = [124, 92, 246];
-  const hi = [236, 72, 153];
-  const color = (t: number) =>
-    `rgb(${Math.round(lo[0] + (hi[0] - lo[0]) * t)},${Math.round(lo[1] + (hi[1] - lo[1]) * t)},${Math.round(lo[2] + (hi[2] - lo[2]) * t)})`;
+  const color = (t: number) => {
+    const [r, g, b] = thermal(1 - t);
+    return `rgb(${r},${g},${b})`;
+  };
 
   const quads: Array<[number, number]> = [];
   for (let i = 0; i < G - 1; i++) for (let j = 0; j < G - 1; j++) quads.push([i, j]);
@@ -381,7 +390,7 @@ function drawLandscape(canvas: HTMLCanvasElement | null, land: LandscapeMsg | nu
     ctx.closePath();
     ctx.fillStyle = color(norm((h00 + h01 + h10 + h11) / 4));
     ctx.fill();
-    ctx.strokeStyle = 'rgba(0,0,0,0.28)';
+    ctx.strokeStyle = 'rgba(255,176,64,0.14)';
     ctx.stroke();
   }
 
@@ -391,7 +400,7 @@ function drawLandscape(canvas: HTMLCanvasElement | null, land: LandscapeMsg | nu
   ctx.arc(px(m, m), py(m, m, hc), 4 * dpr, 0, Math.PI * 2);
   ctx.fillStyle = '#fff';
   ctx.fill();
-  ctx.strokeStyle = '#15101f';
+  ctx.strokeStyle = '#ffb040';
   ctx.lineWidth = 2;
   ctx.stroke();
 }
@@ -529,18 +538,17 @@ export default function Dashboard() {
           <Stat
             label="loss"
             value={Number.isFinite(readout.loss) ? readout.loss.toFixed(3) : '—'}
-            accent="amber"
+            accent="blue"
           />
           <Stat label="train acc" value={`${(readout.trainAcc * 100).toFixed(1)}%`} />
           <Stat
             label="test acc"
             value={readout.testAcc == null ? '…' : `${(readout.testAcc * 100).toFixed(1)}%`}
-            accent="green"
+            accent="amber"
           />
           <Stat
             label="steps/s"
             value={Math.round(readout.stepsPerSec).toLocaleString()}
-            accent="blue"
           />
         </div>
         <div className="dash-controls">
@@ -567,8 +575,8 @@ export default function Dashboard() {
         <div>
           <canvas ref={lossRef} width={800} height={150} className="loss-canvas" />
           <div className="spark-cap">
-            <span style={{ color: 'var(--pink)' }}>━</span> loss ·{' '}
-            <span style={{ color: 'var(--purple)' }}>━</span> train accuracy
+            <span style={{ color: 'var(--accent)' }}>━</span> loss ·{' '}
+            <span style={{ color: 'var(--pop)' }}>━</span> train accuracy
           </div>
         </div>
         <div className="probe">
@@ -613,7 +621,8 @@ export default function Dashboard() {
           </button>
           <p>
             samples the loss on a 21×21 grid around the current weights along two filter-normalized
-            directions. purple = low, pink = high. white dot = the current weights.
+            directions. warm valley = lower loss, cool peaks = higher · the white dot marks the
+            current weights.
           </p>
         </div>
       </div>

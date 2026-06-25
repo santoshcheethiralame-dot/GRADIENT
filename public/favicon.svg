@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="gradient">
+  <defs>
+    <linearGradient id="g-nab" x1="32" y1="18" x2="32" y2="47" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#62c4ff" />
+      <stop offset="0.4" stop-color="#2e9dff" />
+      <stop offset="0.78" stop-color="#ff9a3c" />
+      <stop offset="1" stop-color="#ffd24a" />
+    </linearGradient>
+    <radialGradient id="g-glow" cx="32" cy="47" r="17" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffb24a" stop-opacity="0.6" />
+      <stop offset="1" stop-color="#ffb24a" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <rect width="64" height="64" rx="15" fill="#0b0f1a" />
+  <rect x="1" y="1" width="62" height="62" rx="14" fill="none" stroke="#ffffff" stroke-opacity="0.06" />
+  <circle cx="32" cy="47" r="15" fill="url(#g-glow)" />
+  <path d="M14 19 H50 L32 46 Z" fill="url(#g-nab)" />
+  <circle cx="32" cy="45" r="3.1" fill="#ffe488" />
+</svg>

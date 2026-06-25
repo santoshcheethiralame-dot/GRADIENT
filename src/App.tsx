@@ -114,20 +114,32 @@ export default function App() {
     <div className="app">
       <header className="masthead">
         <div className="brand">
-          <h1 className="wordmark">
+          <div className="wordmark">
             gradient<span className="dot" />
-          </h1>
+          </div>
 
         </div>
         <div className="statline">
           <nav className="nav">
-            <button className={view === 'mlp' ? 'active' : ''} onClick={() => setView('mlp')}>
+            <button
+              className={view === 'mlp' ? 'active' : ''}
+              aria-current={view === 'mlp' ? 'page' : undefined}
+              onClick={() => setView('mlp')}
+            >
               mlp
             </button>
-            <button className={view === 'gpt' ? 'active' : ''} onClick={() => setView('gpt')}>
+            <button
+              className={view === 'gpt' ? 'active' : ''}
+              aria-current={view === 'gpt' ? 'page' : undefined}
+              onClick={() => setView('gpt')}
+            >
               gpt
             </button>
-            <button className={view === 'about' ? 'active' : ''} onClick={() => setView('about')}>
+            <button
+              className={view === 'about' ? 'active' : ''}
+              aria-current={view === 'about' ? 'page' : undefined}
+              onClick={() => setView('about')}
+            >
               about
             </button>
           </nav>
@@ -150,6 +162,7 @@ export default function App() {
 
       {view === 'mlp' && (
         <>
+          <h1 className="sr-only">gradient — a WebGPU MLP trained on the GPU</h1>
           {phase.kind === 'ready' && <Overview phase={phase} report={report} />}
 
           <div className="grid">
@@ -199,6 +212,7 @@ export default function App() {
 
       {view === 'gpt' && (
         <>
+          <h1 className="sr-only">gradient — a from-scratch nano-GPT trained on the GPU</h1>
           {phase.kind === 'ready' && <Overview phase={phase} report={report} />}
 
           <div className="grid">
@@ -458,7 +472,7 @@ function Sparkline({ data, width = 600, height = 76 }: { data: number[]; width?:
       role="img"
       aria-label="training loss curve"
     >
-      <polygon points={area} fill="rgba(236,72,153,0.20)" />
+      <polygon points={area} fill="rgba(255,176,64,0.16)" />
       <polyline
         points={line}
         fill="none"

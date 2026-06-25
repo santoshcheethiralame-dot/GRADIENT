@@ -3,6 +3,7 @@ import { CharTokenizer, NanoGpt } from '../nn/nanogpt';
 import { GpuNanoGpt } from '../nn/nanogpt-gpu';
 import { getGpuContext } from '../gpu/device';
 import { mulberry32 } from '../data/synthetic';
+import { ember } from './ember';
 
 const SHAKESPEARE = `to be, or not to be, that is the question:
 whether tis nobler in the mind to suffer
@@ -29,21 +30,28 @@ function drawAttn(canvas: HTMLCanvasElement | null, data: Float32Array | null, n
   if (canvas.height !== px) canvas.height = px;
   const W = canvas.width;
   ctx.clearRect(0, 0, W, W);
-  ctx.fillStyle = '#15101f';
+  ctx.fillStyle = '#090d18';
   ctx.fillRect(0, 0, W, W);
   if (!data) return;
   let max = 1e-6;
   for (let i = 0; i < data.length; i++) if (data[i] > max) max = data[i];
-  const cell = W / n;
+  const matW = W * 0.84;
+  const gutterX = W * 0.87;
+  const gutterW = W - gutterX;
+  const cellW = matW / n;
+  const cellH = W / n;
   for (let i = 0; i < n; i++) {
+    let rowMax = 0;
     for (let j = 0; j <= i; j++) {
       const v = data[i * n + j] / max;
-      const r = Math.round(124 + (236 - 124) * v);
-      const g = Math.round(92 + (72 - 92) * v);
-      const b = Math.round(246 + (153 - 246) * v);
+      if (v > rowMax) rowMax = v;
+      const [r, g, b] = ember(v);
       ctx.fillStyle = `rgb(${r},${g},${b})`;
-      ctx.fillRect(j * cell, i * cell, cell + 0.5, cell + 0.5);
+      ctx.fillRect(j * cellW, i * cellH, cellW + 0.5, cellH + 0.5);
     }
+    const [gr, gg, gb] = ember(rowMax);
+    ctx.fillStyle = `rgb(${gr},${gg},${gb})`;
+    ctx.fillRect(gutterX, i * cellH, rowMax * gutterW, cellH + 0.5);
   }
 }
 
@@ -218,11 +226,17 @@ export function ShakespeareLab() {
           </div>
           <svg className="nlab-spark" viewBox="0 0 100 100" preserveAspectRatio="none">
             {hist.length > 1 && (
-              <polyline points={pts} fill="none" stroke="var(--purple)" strokeWidth={2} />
+              <>
+                <polygon points={`0,100 ${pts} 100,100`} fill="rgba(255,176,64,0.16)" />
+                <polyline points={pts} fill="none" stroke="var(--purple)" strokeWidth={2} />
+              </>
             )}
           </svg>
           <div className="attn-wrap">
-            <span className="attn-label">attention · {T}×{T} · token i attends to j ≤ i</span>
+            <span className="attn-label">
+              attention · {T}×{T} · token i attends to j ≤ i
+              <span className="ember-key" />
+            </span>
             <canvas ref={attnCanvas} className="attn-canvas" />
           </div>
         </div>

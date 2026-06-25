@@ -3,6 +3,7 @@ import { CharTokenizer, NanoGpt } from '../nn/nanogpt';
 import { GpuNanoGpt } from '../nn/nanogpt-gpu';
 import { getGpuContext } from '../gpu/device';
 import { mulberry32 } from '../data/synthetic';
+import { ember } from './ember';
 
 const CORPUS = `to be, or not to be, that is the question:
 whether 'tis nobler in the mind to suffer
@@ -41,26 +42,26 @@ function drawAttn(canvas: HTMLCanvasElement | null, data: Float32Array | null, n
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
   const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const px = Math.max(1, Math.round(canvas.clientWidth * dpr));
-  if (canvas.width !== px) canvas.width = px;
-  if (canvas.height !== px) canvas.height = px;
-  const W = canvas.width;
-  ctx.clearRect(0, 0, W, W);
-  ctx.fillStyle = '#15101f';
-  ctx.fillRect(0, 0, W, W);
+  const W = Math.max(1, Math.round(canvas.clientWidth * dpr));
+  const H = Math.max(1, Math.round(canvas.clientHeight * dpr));
+  if (canvas.width !== W) canvas.width = W;
+  if (canvas.height !== H) canvas.height = H;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#090d18';
+  ctx.fillRect(0, 0, W, H);
   if (!data) return;
-  let max = 1e-6;
-  for (let i = 0; i < data.length; i++) if (data[i] > max) max = data[i];
-  const cell = W / n;
-  for (let i = 0; i < n; i++) {
-    for (let j = 0; j <= i; j++) {
-      const v = data[i * n + j] / max;
-      const r = Math.round(124 + (236 - 124) * v);
-      const g = Math.round(92 + (72 - 92) * v);
-      const b = Math.round(246 + (153 - 246) * v);
-      ctx.fillStyle = `rgb(${r},${g},${b})`;
-      ctx.fillRect(j * cell, i * cell, cell + 0.5, cell + 0.5);
-    }
+  const i = n - 1;
+  let rowMax = 1e-6;
+  for (let j = 0; j <= i; j++) if (data[i * n + j] > rowMax) rowMax = data[i * n + j];
+  const rows = i + 1;
+  const rowH = H / rows;
+  const x0 = 4 * dpr;
+  const span = W - 8 * dpr;
+  for (let j = 0; j <= i; j++) {
+    const rel = data[i * n + j] / rowMax;
+    const [r, g, b] = ember(rel);
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.fillRect(x0, j * rowH + rowH * 0.14, rel * span, Math.max(1, rowH * 0.72));
   }
 }
 
@@ -195,7 +196,10 @@ export function ScaledLab() {
             </div>
           </div>
           <div className="attn-wrap">
-            <span className="attn-label">attention · head 1 · {T}×{T} · token i attends to j ≤ i</span>
+            <span className="attn-label">
+              attention · head 1 · last token's reach over {T} positions
+              <span className="ember-key" />
+            </span>
             <canvas ref={attnCanvas} className="attn-canvas" />
           </div>
         </div>

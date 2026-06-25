@@ -3,6 +3,7 @@ import { CharTokenizer, NanoGpt, NANO_CORPUS } from '../nn/nanogpt';
 import { GpuNanoGpt, nanoGptGpuBackward } from '../nn/nanogpt-gpu';
 import { getGpuContext } from '../gpu/device';
 import { mulberry32 } from '../data/synthetic';
+import { emberCss } from './ember';
 
 const T = 32;
 const STEPS = 600;
@@ -148,12 +149,12 @@ export function GradientFlowLab() {
         <div className="gflow-screen">
           <div className="gflow-dir">∇ backward — loss enters here ↓</div>
           {bars.map((b) => (
-            <div className="gflow-row" key={b.label}>
+            <div className={b.rel >= 1 ? 'gflow-row max' : 'gflow-row'} key={b.label}>
               <span className="gflow-label">{b.label}</span>
               <div className="gflow-track">
                 <div
                   className="gflow-fill"
-                  style={{ width: `${(b.rel * 100).toFixed(1)}%`, opacity: 0.32 + 0.68 * b.rel }}
+                  style={{ width: `${(b.rel * 100).toFixed(1)}%`, background: emberCss(b.rel) }}
                 />
               </div>
               <span className="gflow-val">{b.rms ? b.rms.toExponential(1) : '—'}</span>

@@ -4,6 +4,7 @@ import { BpeTokenizer } from '../nn/bpe';
 import { nanoGptGpuBackward } from '../nn/nanogpt-gpu';
 import { getGpuContext } from '../gpu/device';
 import { mulberry32 } from '../data/synthetic';
+import { ember } from './ember';
 
 const CORPUS = `to be, or not to be, that is the question:
 whether 'tis nobler in the mind to suffer
@@ -43,6 +44,29 @@ const EPS = 1e-8;
 
 type Phase = 'idle' | 'training' | 'done';
 
+function drawStrip(canvas: HTMLCanvasElement | null, hist: number[]): void {
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const W = Math.max(1, Math.round(canvas.clientWidth * dpr));
+  const H = Math.max(1, Math.round(canvas.clientHeight * dpr));
+  if (canvas.width !== W) canvas.width = W;
+  if (canvas.height !== H) canvas.height = H;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#070a12';
+  ctx.fillRect(0, 0, W, H);
+  if (hist.length < 1) return;
+  let max = 1e-6;
+  for (const v of hist) if (v > max) max = v;
+  const cw = W / hist.length;
+  for (let i = 0; i < hist.length; i++) {
+    const [r, g, b] = ember(hist[i] / max);
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.fillRect(i * cw, 0, cw + 0.6, H);
+  }
+}
+
 export function DeepLab() {
   const [phase, setPhase] = useState<Phase>('idle');
   const [step, setStep] = useState(0);
@@ -51,6 +75,8 @@ export function DeepLab() {
   const [sample, setSample] = useState('');
   const [vocabInfo, setVocabInfo] = useState('');
   const running = useRef(false);
+  const lossHist = useRef<number[]>([]);
+  const stripRef = useRef<HTMLCanvasElement>(null);
 
   const stop = useCallback(() => {
     running.current = false;
@@ -59,6 +85,8 @@ export function DeepLab() {
 
   const reset = useCallback(() => {
     running.current = false;
+    lossHist.current = [];
+    drawStrip(stripRef.current, []);
     setPhase('idle');
     setStep(0);
     setLoss(NaN);
@@ -68,6 +96,7 @@ export function DeepLab() {
 
   const train = useCallback(() => {
     running.current = false;
+    lossHist.current = [];
     setPhase('training');
     setStep(0);
     setLoss(NaN);
@@ -129,6 +158,8 @@ export function DeepLab() {
             l = sum / la.length;
           }
         }
+        if (!Number.isNaN(l)) lossHist.current.push(l);
+        drawStrip(stripRef.current, lossHist.current);
         setStep(s);
         setLoss(l);
         setToks(Math.round((s * T) / ((performance.now() - t0) / 1000)));
@@ -203,6 +234,14 @@ export function DeepLab() {
                 ? 'done · trained on WebGPU'
                 : 'training a 2-block BPE transformer… (sample on completion)'}
           </div>
+        </div>
+
+        <div className="conf-strip-wrap">
+          <span className="conf-label">
+            loss per step · warm = high, cools as it learns
+            <span className="ember-key" />
+          </span>
+          <canvas ref={stripRef} className="conf-strip" />
         </div>
 
         <div className="nlab-controls">

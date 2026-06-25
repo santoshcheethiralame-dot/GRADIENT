@@ -13,8 +13,8 @@ const SEED = 5;
 const D_EMBED = 128;
 const D_FF = 256;
 
-const CPU_COLOR = '#f5a524';
-const GPU_COLOR = '#a78bfa';
+const CPU_COLOR = '#ffd24a';
+const GPU_COLOR = '#3aa0ff';
 
 type Phase = 'idle' | 'racing' | 'done';
 type Lane = { step: number; loss: number; ms: number };
@@ -36,7 +36,7 @@ function drawChart(canvas: HTMLCanvasElement | null, cpu: Pt[], gpu: Pt[]): void
   if (canvas.width !== w) canvas.width = w;
   if (canvas.height !== h) canvas.height = h;
   ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = '#15101f';
+  ctx.fillStyle = '#0a0d16';
   ctx.fillRect(0, 0, w, h);
 
   const all = cpu.concat(gpu);

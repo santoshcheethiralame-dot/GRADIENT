@@ -204,7 +204,10 @@ export function NanoGptLab() {
           </div>
           <svg className="nlab-spark" viewBox="0 0 100 100" preserveAspectRatio="none">
             {hist.length > 1 && (
-              <polyline points={pts} fill="none" stroke="var(--purple)" strokeWidth={2} />
+              <>
+                <polygon points={`0,100 ${pts} 100,100`} fill="rgba(255,176,64,0.16)" />
+                <polyline points={pts} fill="none" stroke="var(--purple)" strokeWidth={2} />
+              </>
             )}
           </svg>
         </div>
